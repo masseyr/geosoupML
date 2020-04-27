@@ -1,5 +1,7 @@
 ## Geosoup Machine Learning library v0.1.1
 
+[![DOI](https://zenodo.org/badge/259178307.svg)](https://zenodo.org/badge/latestdoi/259178307)
+
 Geosoup is a python package for geospatial data manipulation using `GDAL` and `GDAL bindings` in python. This library is the machine learning support for geosoup.
 
 Currently implemented:
