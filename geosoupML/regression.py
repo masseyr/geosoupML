@@ -23,17 +23,6 @@ class _Regressor(object):
     """
     time_it = False
 
-    defaults = {
-        'tile_size': 512,
-        'n_tile_max': 5,
-        'uncert_dict': None,
-        'array_additive': 0.,
-        'array_multiplier': 1.,
-        'nodatavalue': None,
-        'out_nodatavalue': None,
-        'mask_band': None
-    }
-
     def __init__(self,
                  data=None,
                  regressor=None,
@@ -113,6 +102,90 @@ class _Regressor(object):
             regressor_obj = pickle.load(fileptr)
             return regressor_obj
 
+    def get_defaults(self,
+                     raster=None,
+                     **kwargs):
+        """
+        Method to define default parameters for regressor
+        :param raster: Raster object (see geosoup.Raster)
+        :param kwargs: Keyword arguments
+        """
+
+        defaults = {
+            'tile_size': 512,
+            'n_tile_max': 5,
+            'uncert_dict': None,
+            'array_additive': 0.,
+            'array_multiplier': 1.,
+            'nodatavalue': None,
+            'out_nodatavalue': None,
+            'mask_band': None,
+            'out_data_type': gdal_array.NumericTypeCodeToGDALTypeCode(self.data['labels'].dtype)
+        }
+
+        defaults.update(kwargs)
+
+        if raster is not None:
+            if not raster.init:
+                raster.initialize()
+
+            nbands = raster.shape[0]
+            nrows = raster.shape[1]
+            ncols = raster.shape[2]
+
+            check_bands = kwargs['check_bands'] if 'check_bands' in kwargs else list(range(nbands))
+            if type(check_bands) not in (list, tuple):
+                check_bands = [check_bands]
+
+            kwargs_computed = {
+                'band_multipliers': np.array([defaults['array_multiplier'] for _ in raster.bnames]),
+                'band_additives': np.array([defaults['array_additive'] for _ in raster.bnames]),
+                'tile_size': min([nrows, ncols]) ** 2 if (min([nrows, ncols]) ** 2) <= defaults['tile_size']
+                else defaults['tile_size'],
+                'out_nodatavalue': kwargs['nodatavalue'] if defaults['out_nodatavalue']
+                is None else defaults['out_nodatavalue'],
+                'check_bands': check_bands,
+            }
+
+            defaults.update(kwargs_computed)
+
+            if 'array_multiplier' in kwargs:
+                if 'band_multipliers' in kwargs:
+                    defaults['band_multipliers'] = np.array([defaults['band_multipliers'][elem]
+                                                            if elem in defaults['band_multipliers']
+                                                            else defaults['array_multiplier']
+                                                            for elem in raster.bnames])
+                else:
+                    defaults['band_multipliers'] = np.array([defaults['array_multiplier']
+                                                             for _ in raster.bnames])
+
+            if 'array_additive' in kwargs:
+                if 'band_additives' in kwargs:
+                    defaults['band_additives'] = np.array([defaults['band_additives'][elem]
+                                                          if elem in defaults['band_additives']
+                                                          else defaults['array_additive']
+                                                          for elem in raster.bnames])
+                else:
+                    defaults['band_additives'] = np.array([defaults['array_additive']
+                                                           for _ in raster.bnames])
+
+            if defaults['mask_band'] is not None:
+                if type(defaults['mask_band']) == str:
+                    try:
+                        defaults['mask_band'] = raster.bnames.index(defaults['mask_band'])
+                    except ValueError:
+                        warnings.warn('Mask band ignored: Unrecognized band name.')
+                        defaults['mask_band'] = None
+                elif type(defaults['mask_band']) in (int, float):
+                    if defaults['mask_band'] > raster.shape[0]:
+                        warnings.warn('Mask band ignored: Mask band index greater than number of bands. ' +
+                                      'Indices start at 0.')
+                else:
+                    warnings.warn('Mask band ignored: Unrecognized data type.')
+                    defaults['mask_band'] = None
+
+        return defaults
+
     @staticmethod
     @Timer.timing(time_it)
     def regress_raster(regressor,
@@ -150,68 +223,22 @@ class _Regressor(object):
                                      a feature band and its uncertainty band. Only
                                      one uncertainty band per feature is allowed.
 
-
         :returns: Output as raster object
         """
-        if not raster_obj.init:
-            raster_obj.initialize()
 
-        defaults = Opt.__copy__(_Regressor.defaults)
+        nodatavalue = kwargs['nodatavalue'] if 'nodatavalue' in kwargs else 0.0
+
+        if not raster_obj.init:
+            raster_obj.initialize(nan_replacement=nodatavalue)
+
+        defaults = regressor.get_defaults(raster_obj,
+                                          **kwargs)
+        verbose = defaults['verbose'] if 'verbose' in defaults else False
+        defaults['verbose'] = False
 
         nbands = raster_obj.shape[0]
         nrows = raster_obj.shape[1]
         ncols = raster_obj.shape[2]
-
-        if nbands < len(regressor.features):
-            raise ValueError('Regressor trained using more features than supplied raster')
-        elif any([feat not in raster_obj.bnames for feat in regressor.features]):
-            raise ValueError('Missing trained feature in Raster object')
-
-        kwargs_computed = {
-            'out_data_type': gdal_array.NumericTypeCodeToGDALTypeCode(regressor.data['labels'].dtype),
-            'tile_size': min([nrows, ncols]) ** 2 if (min([nrows, ncols]) ** 2) <= defaults['tile_size']
-            else defaults['tile_size'],
-            'band_multipliers': np.array([defaults['array_multiplier'] for _ in raster_obj.bnames]),
-            'band_additives': np.array([defaults['array_additive'] for _ in raster_obj.bnames])
-        }
-
-        defaults.update(kwargs_computed)
-        defaults.update(kwargs)
-
-        if 'array_multiplier' in kwargs:
-            if 'band_multipliers' in kwargs:
-                defaults['band_multipliers'] = np.array([defaults['band_multipliers'][elem]
-                                                        if elem in defaults['band_multipliers']
-                                                        else defaults['array_multiplier']
-                                                        for elem in raster_obj.bnames])
-            else:
-                defaults['band_multipliers'] = np.array([defaults['array_multiplier']
-                                                         for _ in raster_obj.bnames])
-
-        if 'array_additive' in kwargs:
-            if 'band_additives' in kwargs:
-                defaults['band_additives'] = np.array([defaults['band_additives'][elem]
-                                                      if elem in defaults['band_additives']
-                                                      else defaults['array_additive']
-                                                      for elem in raster_obj.bnames])
-            else:
-                defaults['band_additives'] = np.array([defaults['array_additive']
-                                                       for _ in raster_obj.bnames])
-
-        if defaults['mask_band'] is not None:
-            if type(defaults['mask_band']) == str:
-                try:
-                    defaults['mask_band'] = raster_obj.bnames.index(defaults['mask_band'])
-                except ValueError:
-                    warnings.warn('Mask band ignored: Unrecognized band name.')
-                    defaults['mask_band'] = None
-            elif type(defaults['mask_band']) in (int, float):
-                if defaults['mask_band'] > raster_obj.shape[0]:
-                    warnings.warn('Mask band ignored: Mask band index greater than number of bands. ' +
-                                  'Indices start at 0.')
-            else:
-                warnings.warn('Mask band ignored: Unrecognized data type.')
-                defaults['mask_band'] = None
 
         # file handler object
         handler = Handler(raster_obj.name)
@@ -229,59 +256,69 @@ class _Regressor(object):
         if regressor.feature_index is None:
             regressor.feature_index = list(raster_obj.bnames.index(feat) for feat in regressor.features)
 
-        out_ras_arr = np.zeros([nrows, ncols],
+        out_ras_arr = np.zeros([1, nrows, ncols],
                                dtype=gdal_array.GDALTypeCodeToNumericTypeCode(defaults['out_data_type']))
 
-        raster_obj.make_tile_grid(defaults['tile_size'],
-                                  defaults['tile_size'])
+        if not raster_obj.tile_grid:
+            raster_obj.make_tile_grid(defaults['tile_size'],
+                                      defaults['tile_size'])
 
-        if defaults['verbose']:
+        if verbose:
+
+            for k, v in defaults.items():
+                Opt.cprint('{} : {}'.format(str(k), str(v)))
+
             Opt.cprint('\nProcessing {} raster tiles...\n'.format(str(raster_obj.ntiles)))
 
         count = 0
         for _, tile_arr in raster_obj.get_next_tile():
+
             tiept_x, tiept_y, tile_cols, tile_rows = raster_obj.tile_grid[count]['block_coords']
 
-            if defaults['verbose']:
-                Opt.cprint("\nProcessing tile {} of {}: x {}, y {}, cols {}, rows {}".format(str(count + 1),
-                                                                                             str(raster_obj.ntiles),
-                                                                                             str(tiept_x),
-                                                                                             str(tiept_y),
-                                                                                             str(tile_cols),
-                                                                                             str(tile_rows)),
-                           newline='\n')
+            if verbose:
+                Opt.cprint("Processing tile {} of {}: x {}, y {}, cols {}, rows {}".format(str(count + 1),
+                                                                                           str(raster_obj.ntiles),
+                                                                                           str(tiept_x),
+                                                                                           str(tiept_y),
+                                                                                           str(tile_cols),
+                                                                                           str(tile_rows)),
+                           newline=' :')
 
             new_shape = [nbands, tile_rows * tile_cols]
 
             tile_arr = tile_arr.reshape(new_shape)
             tile_arr = tile_arr.swapaxes(0, 1)
 
-            minmax = np.zeros([nbands, 2])
+            minmax = np.zeros([len(defaults['check_bands']), 2])
             bad_tile_flag = False
 
-            for ii in range(tile_arr.shape[1]):
-                minmax[ii, :] = np.array([np.min(tile_arr[:, ii]), np.max(tile_arr[:, ii])])
-                if defaults['verbose']:
-                    Opt.cprint('Band {} : '.format(str(ii + 1)) +
+            for ii, band in enumerate(defaults['check_bands']):
+
+                minmax[ii, :] = np.array([np.min(tile_arr[:, band]), np.max(tile_arr[:, band])])
+
+                if verbose:
+                    Opt.cprint(' Band {} : '.format(str(band + 1)) +
                                'min {} max {}'.format(str(minmax[ii, 0]),
-                                                      str(minmax[ii, 1])))
+                                                      str(minmax[ii, 1])),
+                               newline='')
 
                 if defaults['nodatavalue'] is not None:
                     if (minmax[ii, 0] == minmax[ii, 1] == defaults['nodatavalue']) \
-                            and (ii in regressor.feature_index):
+                            and (band in regressor.feature_index):
 
                         bad_tile_flag = True
 
             if not bad_tile_flag:
-                for k, v in defaults.items():
-                    print('{} : {}'.format(str(k), str(v)))
-                for elem in raster_obj.tile_grid:
-                    print(elem)
                 tile_arr_out = regressor.predict(tile_arr,
                                                  output_type=output_type,
                                                  **defaults)
+                if verbose:
+                    Opt.cprint(' - Processed')
             else:
                 tile_arr_out = np.zeros([tile_rows * tile_cols]) + defaults['out_nodatavalue']
+
+                if verbose:
+                    Opt.cprint(' - Ignored, bad tile')
 
             if tile_arr_out.dtype != out_ras_arr.dtype:
                 tile_arr_out = tile_arr_out.astype(out_ras_arr.dtype)
@@ -292,11 +329,11 @@ class _Regressor(object):
             else:
                 tile_arr_out_reshaped = tile_arr_out.reshape([tile_rows, tile_cols])
 
-            out_ras_arr[tiept_y: (tiept_y + tile_rows), tiept_x: (tiept_x + tile_cols)] = tile_arr_out_reshaped
+            out_ras_arr[0, tiept_y: (tiept_y + tile_rows), tiept_x: (tiept_x + tile_cols)] = tile_arr_out_reshaped
 
             count += 1
 
-        if defaults['verbose']:
+        if verbose:
             Opt.cprint("\nInternal tile processing completed\n")
 
         out_ras = Raster(outfile)
@@ -1120,14 +1157,15 @@ class RFRegressor(_Regressor):
         if not type(arr) == np.ndarray:
             arr = np.array(arr)
 
-        defaults = Opt.__copy__(self.defaults)
-        defaults.update(kwargs)
+        kwargs.update({'output_type': output_type})
+
+        defaults = self.get_defaults(**kwargs)
+
+        verbose = defaults['verbose'] if 'verbose' in defaults else False
 
         uncert_dict = defaults['uncert_dict']
         tile_size = defaults['tile_size'] ** 2
         n_tile_max = defaults['n_tile_max']
-
-        print('tile_size: -- {}'.format(tile_size))
 
         for key, value in defaults.items():
             if key in ('gain', 'bias', 'upper_limit', 'lower_limit'):
@@ -1152,8 +1190,8 @@ class RFRegressor(_Regressor):
         if ntiles > n_tile_max:
 
             for i in range(0, ntiles - 1):
-                if kwargs['verbose']:
-                    Opt.cprint('Processing internal tile {} of {}'.format(str(i+1), ntiles),
+                if verbose:
+                    Opt.cprint('Processing tile {} of {}'.format(str(i+1), ntiles),
                                newline='')
 
                 if output_type == 'full':
@@ -1170,7 +1208,7 @@ class RFRegressor(_Regressor):
                                                        **kwargs)
 
                     out_arr[:, i * npx_tile:(i + 1) * npx_tile] = temp_tile_
-                    if kwargs['verbose']:
+                    if verbose:
                         Opt.cprint(' min {} max {}'.format(np.min(temp_tile_), np.max(temp_tile_)))
 
                 else:
@@ -1186,14 +1224,14 @@ class RFRegressor(_Regressor):
                                                        **kwargs)
 
                     out_arr[i * npx_tile:(i + 1) * npx_tile] = temp_tile_
-                    if kwargs['verbose']:
+                    if verbose:
                         Opt.cprint(' min {} max {}'.format(np.min(temp_tile_), np.max(temp_tile_)))
 
             if npx_last > 0:  # number of total pixels for the last tile
 
                 i = ntiles - 1
-                if kwargs['verbose']:
-                    Opt.cprint('Processing internal tile {} of {}'.format(str(i+1), ntiles),
+                if verbose:
+                    Opt.cprint('Processing tile {} of {}'.format(str(i+1), ntiles),
                                newline='')
 
                 if output_type == 'full':
@@ -1209,7 +1247,7 @@ class RFRegressor(_Regressor):
                                                        **kwargs)
 
                     out_arr[:, i * npx_tile:(i * npx_tile + npx_last)] = temp_tile_
-                    if kwargs['verbose']:
+                    if verbose:
                         Opt.cprint(' min {} max {}'.format(np.min(temp_tile_), np.max(temp_tile_)))
 
                 else:
@@ -1225,12 +1263,12 @@ class RFRegressor(_Regressor):
                                                        **kwargs)
 
                     out_arr[i * npx_tile:(i * npx_tile + npx_last)] = temp_tile_
-                    if kwargs['verbose']:
+                    if verbose:
                         Opt.cprint(' min {} max {}'.format(np.min(temp_tile_), np.max(temp_tile_)))
 
         else:
-            if kwargs['verbose']:
-                Opt.cprint('Processing internal tile 1 of 1',
+            if verbose:
+                Opt.cprint('Processing tile 1 of 1',
                            newline='')
             if uncert_dict is not None and type(uncert_dict) == dict:
                 out_arr = self.regress_tile_uncert(arr,
@@ -1242,7 +1280,7 @@ class RFRegressor(_Regressor):
                                             0,
                                             npx_inp,
                                             **kwargs)
-            if kwargs['verbose']:
+            if verbose:
                 Opt.cprint(' min {} max {}'.format(np.min(out_arr), np.max(out_arr)))
 
         return out_arr
