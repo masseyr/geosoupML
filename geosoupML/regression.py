@@ -953,10 +953,11 @@ class RFRegressor(_Regressor):
 
             if output_type == 'sd':
                 out_tile = out_tile ** 0.5
+
         else:
             raise RuntimeError("Unknown output type or no output type specified")
 
-        if len(self.adjustment) > 0:
+        if len(self.adjustment) > 0 and output_type not in ('sd', 'var'):
 
             if 'gain' in self.adjustment:
                 out_tile = out_tile * self.adjustment['gain']
