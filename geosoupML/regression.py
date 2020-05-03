@@ -102,8 +102,8 @@ class _Regressor(object):
             regressor_obj = pickle.load(fileptr)
             return regressor_obj
 
-    def get_defaults(self,
-                     raster=None,
+    @staticmethod
+    def get_defaults(raster=None,
                      **kwargs):
         """
         Method to define default parameters for regressor
@@ -112,6 +112,12 @@ class _Regressor(object):
         """
 
         defaults = {
+            'ulim_upper_multiplier': 0.975,
+            'ulim_lower_multiplier': 0.025,
+            'ulim': 0.975,
+            'llim': 0.025,
+            'variance_limit': 0.05,
+            'min_rsq_limit': 60.0,
             'tile_size': 512,
             'n_tile_max': 5,
             'uncert_dict': None,
@@ -120,7 +126,7 @@ class _Regressor(object):
             'nodatavalue': None,
             'out_nodatavalue': None,
             'mask_band': None,
-            'out_data_type': gdal_array.NumericTypeCodeToGDALTypeCode(self.data['labels'].dtype)
+            'out_data_type': gdal.GDT_Float32,
         }
 
         defaults.update(kwargs)
@@ -195,8 +201,8 @@ class _Regressor(object):
                        band_name='prediction',
                        output_type='median',
                        **kwargs):
-
-        """Tree variance from the RF regressor
+        """
+        Tree variance from the RF regressor
         :param regressor: _Regressor object
         :param raster_obj: Initialized Raster object
         :param outfile: name of output file
@@ -207,9 +213,7 @@ class _Regressor(object):
                             median ('median'),
                             mean ('mean')
                             or confidence interval ('conf')
-
-        :param kwargs:
-                        array_multiplier: rescale all band arrays using this value
+        :param kwargs:  array_multiplier: rescale all band arrays using this value
                         array_additive: add this value to all band arrays
                         out_data_type: output raster data type (GDAL data type)
                         nodatavalue: No data value for input raster
@@ -222,7 +226,6 @@ class _Regressor(object):
                         uncert_dict: Dictionary with each key value pair specifying
                                      a feature band and its uncertainty band. Only
                                      one uncertainty band per feature is allowed.
-
         :returns: Output as raster object
         """
 
@@ -231,8 +234,12 @@ class _Regressor(object):
         if not raster_obj.init:
             raster_obj.initialize(nan_replacement=nodatavalue)
 
-        defaults = regressor.get_defaults(raster_obj,
-                                          **kwargs)
+        kwargs.update({'out_data_type':
+                       gdal_array.NumericTypeCodeToGDALTypeCode(regressor.data['labels'].dtype)})
+
+        defaults = _Regressor.get_defaults(raster_obj,
+                                           **kwargs)
+
         verbose = defaults['verbose'] if 'verbose' in defaults else False
         defaults['verbose'] = False
 
@@ -420,6 +427,8 @@ class _Regressor(object):
 
         result_list = list()
 
+        defaults = _Regressor.get_defaults()
+
         Opt.cprint('Length of arguments at {} is {}'.format(str(rank), len(args_list)))
 
         if args_list is None:
@@ -433,8 +442,10 @@ class _Regressor(object):
             model = RFRegressor(**param)
             model.time_it = True
 
-            regress_limit = [0.025 * ulim, 0.975 * ulim]
-            rsq_limit = 60.0
+            regress_limit = [defaults['ulim_lower_multiplier'] * ulim,
+                             defaults['ulim_upper_multiplier'] * ulim]
+
+            rsq_limit = defaults['min_rsq_limit']
 
             # fit RF classifier using training data
             model.fit_data(train_samp.format_data())
@@ -1160,7 +1171,7 @@ class RFRegressor(_Regressor):
 
         kwargs.update({'output_type': output_type})
 
-        defaults = self.get_defaults(**kwargs)
+        defaults = _Regressor.get_defaults(**kwargs)
 
         verbose = defaults['verbose'] if 'verbose' in defaults else False
 
@@ -1453,7 +1464,7 @@ class RFRegressor(_Regressor):
             raise ValueError("Model not initialized with samples")
 
     def get_adjustment_param(self,
-                             clip=0.025,
+                             clip=None,
                              data_limits=None,
                              output='median',
                              over_adjust=1.0):
@@ -1465,6 +1476,10 @@ class RFRegressor(_Regressor):
         :param over_adjust: Amount of over adjustment needed to adjust slope of the output data
         :return: None
         """
+        defaults = _Regressor.get_defaults()
+
+        if clip is None:
+            clip = defaults['llim']
 
         if data_limits is None:
             data_limits = [self.data['labels'].min(), self.data['labels'].max()]
@@ -1671,12 +1686,15 @@ class HRFRegressor(RFRegressor):
                            True   - half range (x +/- a/2)
         :return: numpy 1-D array
         """
+
+        defaults = _Regressor.get_defaults()
+
         # leaf variance limit for sd or var output type
         if min_variance is None:
             if intvl is not None:
                 min_variance = (1 - intvl/100.) * np.min(arr.astype(np.float32))
             else:
-                min_variance = 0.05 * np.min(arr.astype(np.float32))
+                min_variance = defaults['variance_limit'] * np.min(arr.astype(np.float32))
 
         # define input array shape param
         if tile_end is None:
