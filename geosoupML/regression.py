@@ -118,14 +118,20 @@ class _Regressor(object):
             'llim': 0.025,
             'variance_limit': 0.05,
             'min_rsq_limit': 60.0,
+            'n_random': 5,
+            'uncert_dict': {},
+            'half_range': True,
             'tile_size': 512,
             'n_tile_max': 5,
-            'uncert_dict': None,
             'array_additive': 0.,
             'array_multiplier': 1.,
             'nodatavalue': None,
             'out_nodatavalue': None,
             'mask_band': None,
+            'regressor': None,
+            'output_type': 'mean',
+            'band_name': 'prediction',
+            'calculated_uncert_type': 'sd',
             'out_data_type': gdal.GDT_Float32,
         }
 
@@ -198,8 +204,8 @@ class _Regressor(object):
                        raster_obj,
                        outfile=None,
                        outdir=None,
-                       band_name='prediction',
-                       output_type='median',
+                       output_type=None,
+                       band_name=None,
                        **kwargs):
         """
         Tree variance from the RF regressor
@@ -239,6 +245,9 @@ class _Regressor(object):
 
         defaults = _Regressor.get_defaults(raster_obj,
                                            **kwargs)
+
+        output_type = defaults['output_type'] if output_type is None else output_type
+        band_name = defaults['band_name'] if band_name is None else band_name
 
         verbose = defaults['verbose'] if 'verbose' in defaults else False
         defaults['verbose'] = False
@@ -317,7 +326,6 @@ class _Regressor(object):
 
             if not bad_tile_flag:
                 tile_arr_out = regressor.predict(tile_arr,
-                                                 output_type=output_type,
                                                  **defaults)
                 if verbose:
                     Opt.cprint(' - Processed')
@@ -868,7 +876,7 @@ class RFRegressor(_Regressor):
                      arr,
                      tile_start=None,
                      tile_end=None,
-                     output_type='median',
+                     output_type=None,
                      nodatavalue=None,
                      intvl=None,
                      min_variance=None,
@@ -891,11 +899,15 @@ class RFRegressor(_Regressor):
         :param min_variance: Minimum variance after which to cutoff
         :return: numpy 1-D array
         """
+        defaults = self.get_defaults()
+
         if min_variance is None:
             if intvl is not None:
                 min_variance = (1 - intvl/100.) * np.min(arr.astype(np.float32))
             else:
-                min_variance = 0.05 * np.min(arr.astype(np.float32))
+                min_variance = defaults['variance_limit'] * np.min(arr.astype(np.float32))
+
+        output_type = defaults['output_type'] if output_type is None else output_type
 
         if tile_end is None:
             tile_end = arr.shape[0]
@@ -932,7 +944,7 @@ class RFRegressor(_Regressor):
         out_tile = np.zeros([tile_end - tile_start])
         tile_arr = np.zeros([self.trees, (tile_end - tile_start)])
 
-        if output_type in ('mean', 'median', 'full'):
+        if output_type in ('mean', 'mean', 'full'):
 
             # calculate tree predictions for each pixel in a 2d array
             for jj, tree_ in enumerate(self.regressor.estimators_):
@@ -968,19 +980,21 @@ class RFRegressor(_Regressor):
         else:
             raise RuntimeError("Unknown output type or no output type specified")
 
-        if len(self.adjustment) > 0 and output_type not in ('sd', 'var'):
+        if len(self.adjustment) > 0:
 
             if 'gain' in self.adjustment:
                 out_tile = out_tile * self.adjustment['gain']
 
-            if 'bias' in self.adjustment:
-                out_tile = out_tile + self.adjustment['bias']
+            if output_type not in ('sd', 'var'):
 
-            if 'upper_limit' in self.adjustment:
-                out_tile[out_tile > self.adjustment['upper_limit']] = self.adjustment['upper_limit']
+                if 'bias' in self.adjustment:
+                    out_tile = out_tile + self.adjustment['bias']
 
-            if 'lower_limit' in self.adjustment:
-                out_tile[out_tile < self.adjustment['lower_limit']] = self.adjustment['lower_limit']
+                if 'upper_limit' in self.adjustment:
+                    out_tile[out_tile > self.adjustment['upper_limit']] = self.adjustment['upper_limit']
+
+                if 'lower_limit' in self.adjustment:
+                    out_tile[out_tile < self.adjustment['lower_limit']] = self.adjustment['lower_limit']
 
         if nodatavalue is not None:
             out_tile[np.where(mask_arr == 0)] = kwargs['out_nodatavalue']
@@ -1008,9 +1022,20 @@ class RFRegressor(_Regressor):
         :return: range of uncertainty values if one or more uncertainty bands
                  are specified in uncertainty dict else returns 0
         """
-        n_rand = kwargs.pop('n_rand', 5)
-        uncert_dict = kwargs.pop('uncert_dict', {})
-        output_type = kwargs.pop('output_type', 'median')
+        defaults = _Regressor.get_defaults(kwargs)
+
+        uncert_dict = defaults['uncert_dict']
+        regressor = defaults['regressor']
+
+        if uncert_dict is None or len(uncert_dict) == 0:
+            raise RuntimeError("No uncertainty band dictionary provided")
+
+        if regressor is None:
+            raise RuntimeError("Regressor must be supplied to calculate uncertainty ranges")
+
+        n_rand = defaults['n_rand']
+        output_type = defaults['output_type']
+
         n_samp = n_rand ** len(uncert_dict)
 
         if n_samp > 0:
@@ -1019,7 +1044,7 @@ class RFRegressor(_Regressor):
             feat_vals = pixel_vec[uncert_dict.keys()].tolist()
             uncert_vals = pixel_vec[uncert_dict.values()].tolist()
 
-            half_range = kwargs.pop('half_range', True)
+            half_range = defaults['half_range']
 
             if half_range:
                 uncert_rand_lists = list((np.random.rand(n_rand) - 0.5) * uncert_val + feat_vals[ii] for
@@ -1031,8 +1056,6 @@ class RFRegressor(_Regressor):
             feat_arr[:, uncert_dict.keys()] = np.array(zip(*list(np.array(temp_arr).flatten()
                                                                  for temp_arr in
                                                                  np.meshgrid(*uncert_rand_lists))))
-
-            regressor = kwargs.pop('regressor')
 
             pred_arr = regressor.regress_tile(feat_arr,
                                               tile_start=0,
@@ -1048,12 +1071,12 @@ class RFRegressor(_Regressor):
                             arr,
                             tile_start=None,
                             tile_end=None,
-                            output_type='median',
+                            output_type=None,
                             uncert_dict=None,
                             n_rand=5,
                             half_range=True,
                             compare_uncert=False,
-                            calculated_uncert_type='sd',
+                            calculated_uncert_type=None,
                             **kwargs):
         """
         Method to regress each tile of the image and compute range of uncertainty values from one RF regressor
@@ -1096,19 +1119,25 @@ class RFRegressor(_Regressor):
                            False  - full range (x +/- a), or
                            True   - half range (x +/- a/2)
         """
-        uncert_kwargs = Opt.__copy__(kwargs)
-        if uncert_dict is not None:
+        defaults = self.get_defaults(kwargs)
 
-            uncert_kwargs.update({'regressor': self,
-                                  'uncert_dict': uncert_dict,
-                                  'n_rand': n_rand,
-                                  'output_type': output_type,
-                                  'half_range': half_range})
+        output_type = defaults['output_type'] \
+            if output_type is None else output_type
+
+        calculated_uncert_type = defaults['calculated_uncert_type'] \
+            if calculated_uncert_type is None else calculated_uncert_type
+
+        if uncert_dict is not None:
+            kwargs.update({'regressor': self,
+                           'uncert_dict': uncert_dict,
+                           'n_rand': n_rand,
+                           'output_type': output_type,
+                           'half_range': half_range})
 
             propagated_uncert = np.apply_along_axis(self.pixel_range,
                                                     1,
                                                     arr[tile_start:tile_end, :],
-                                                    **uncert_kwargs)
+                                                    **kwargs)
 
             if compare_uncert:
                 calculated_uncert = self.regress_tile(arr,
@@ -1128,7 +1157,7 @@ class RFRegressor(_Regressor):
     @Timer.timing(time_it)
     def predict(self,
                 arr,
-                output_type='median',
+                output_type=None,
                 **kwargs):
         """
         Calculate random forest model prediction, variance, or standard deviation.
@@ -1169,9 +1198,10 @@ class RFRegressor(_Regressor):
         if not type(arr) == np.ndarray:
             arr = np.array(arr)
 
-        kwargs.update({'output_type': output_type})
-
         defaults = _Regressor.get_defaults(**kwargs)
+
+        output_type = defaults['output_type'] \
+            if output_type is None else output_type
 
         verbose = defaults['verbose'] if 'verbose' in defaults else False
 
@@ -1282,7 +1312,7 @@ class RFRegressor(_Regressor):
             if verbose:
                 Opt.cprint('Processing tile 1 of 1',
                            newline='')
-            if uncert_dict is not None and type(uncert_dict) == dict:
+            if uncert_dict is not None and type(uncert_dict) == dict and len(uncert_dict) > 0:
                 out_arr = self.regress_tile_uncert(arr,
                                                    0,
                                                    npx_inp,
@@ -1301,13 +1331,14 @@ class RFRegressor(_Regressor):
                            data,
                            picklefile=None,
                            outfile=None,
-                           output='median',
+                           output_type=None,
                            **kwargs):
         """
         Get tree predictions from the RF regressor
         :param data: Dictionary object from Samples.format_data
         :param picklefile: Random Forest pickle file
-        :param output: Metric to be omputed from the random forest (options: 'mean','median','sd')
+        :param output_type: Metric to be computed from RandomForestRegressor
+                            (options: 'mean','median','sd')
         :param outfile: output csv file name
         :param kwargs: Keyword arguments:
                'gain': Adjustment of the predicted output by linear adjustment of gain (slope)
@@ -1319,6 +1350,11 @@ class RFRegressor(_Regressor):
                'var_y': Boolean (if variance of leaf nodes should be calculated)
                'sd_y': Boolean (if the standard dev of all values at a leaf should be calculated)
         """
+        defaults = self.get_defaults(kwargs)
+
+        output_type = defaults['output_type'] \
+            if output_type is None else output_type
+
         for key, value in kwargs.items():
             if key in ('gain', 'bias', 'upper_limit', 'lower_limit'):
                 self.adjustment[key] = value
@@ -1363,7 +1399,7 @@ class RFRegressor(_Regressor):
 
         # calculate median tree predictions
         pred_y = self.predict(data['features'],
-                              output_type=output,
+                              output_type=output_type,
                               verbose=verbose)
 
         # rms error of the predicted versus actual
@@ -1442,19 +1478,22 @@ class RFRegressor(_Regressor):
 
     def get_training_fit(self,
                          regress_limit=None,
-                         output='median'):
+                         output_type=None):
 
         """
         Find out how well the training samples fit the model
-        :param output: Metric to be omputed from the random forest (options: 'mean','median','sd')
+        :param output_type: Metric to be omputed from the random forest (options: 'mean','median','sd')
         :param regress_limit: List of upper and lower regression limits for training fit prediction
         :return: None
         """
+        defaults = self.get_defaults()
+        output_type = defaults['output_type'] if output_type is None else output_type
+
         if self.fit:
             # predict using held out samples and print to file
             pred = self.sample_predictions(self.data,
                                            regress_limit=regress_limit,
-                                           output=output)
+                                           output_type=output_type)
 
             self.training_results['rsq'] = pred['rsq'] * 100.0
             self.training_results['slope'] = pred['slope']
@@ -1466,17 +1505,18 @@ class RFRegressor(_Regressor):
     def get_adjustment_param(self,
                              clip=None,
                              data_limits=None,
-                             output='median',
+                             output_type=None,
                              over_adjust=1.0):
         """
         get the model adjustment parameters based on training fit
-        :param output: Metric to be computed from the random forest (options: 'mean','median','sd')
+        :param output_type: Metric to be computed from the random forest (options: 'mean','median','sd')
         :param clip: Ratio of samples not to be used at each tail end
         :param data_limits: tuple of (min, max) limits of output data
         :param over_adjust: Amount of over adjustment needed to adjust slope of the output data
         :return: None
         """
         defaults = _Regressor.get_defaults()
+        output_type = defaults['output_type'] if output_type is None else output_type
 
         if clip is None:
             clip = defaults['llim']
@@ -1488,7 +1528,7 @@ class RFRegressor(_Regressor):
                          data_limits[1] - clip * (data_limits[1]-data_limits[0])]
 
         self.get_training_fit(regress_limit=regress_limit,
-                              output=output)
+                              output_type=output_type)
 
         if self.training_results['intercept'] > regress_limit[0]:
             self.adjustment['bias'] = -1.0 * (self.training_results['intercept'] / self.training_results['slope'])
@@ -1556,11 +1596,11 @@ class HRFRegressor(RFRegressor):
                        raster_obj,
                        outfile=None,
                        outdir=None,
-                       band_name='prediction',
-                       output_type='median',
+                       band_name=None,
+                       output_type=None,
                        array_multiplier=1.0,
                        array_additive=0.0,
-                       out_data_type=gdal.GDT_Float32,
+                       out_data_type=None,
                        nodatavalue=None,
                        **kwargs):
 
@@ -1579,6 +1619,11 @@ class HRFRegressor(RFRegressor):
         :returns: Output as raster object
         """
 
+        defaults = self.get_defaults()
+        output_type = defaults['output_type'] if output_type is None else output_type
+        band_name = defaults['band_name'] if band_name is None else band_name
+        out_data_type = defaults['out_data_type'] if out_data_type is None else out_data_type
+
         self.feature_index = list(list(raster_obj.bnames.index(feat) for feat in feat_grp)
                                   for feat_grp in self.features)
 
@@ -1596,7 +1641,7 @@ class HRFRegressor(RFRegressor):
 
     def predict(self,
                 arr,
-                output_type='median',
+                output_type=None,
                 **kwargs):
         """
         Calculate random forest model prediction, variance, or standard deviation.
@@ -1634,6 +1679,8 @@ class HRFRegressor(RFRegressor):
 
         :return: 1d image array (that will need reshaping if image output)
         """
+        defaults = self.get_defaults()
+        output_type = defaults['output_type'] if output_type is None else output_type
 
         if output_type == 'full':
             raise ValueError('Output type "full" is not supported for this class')
@@ -1646,7 +1693,7 @@ class HRFRegressor(RFRegressor):
                      arr,
                      tile_start=None,
                      tile_end=None,
-                     output_type='median',
+                     output_type=None,
                      nodatavalue=None,
                      intvl=None,
                      min_variance=None,
@@ -1688,6 +1735,7 @@ class HRFRegressor(RFRegressor):
         """
 
         defaults = _Regressor.get_defaults()
+        output_type = defaults['output_type'] if output_type is None else output_type
 
         # leaf variance limit for sd or var output type
         if min_variance is None:
