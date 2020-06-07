@@ -343,10 +343,10 @@ class Euclidean(Distance):
 
         if thresh is None:
             thresh = self.cluster_center('percentile_90')
-        elif 'percentile_' in thresh:
-            thresh = self.cluster_center(thresh)
-        elif thresh in (int, float):
+        elif type(thresh) in (int, float):
             thresh = self.cluster_center('percentile_{}'.format(str(int(thresh))))
+        elif type(thresh) == str and 'percentile_' in thresh:
+            thresh = self.cluster_center(thresh)
         else:
             if verbose:
                 warnings.warn('Invalid thresh value.\n Using default: 90th percentile centroid vector.')
