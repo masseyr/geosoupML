@@ -333,8 +333,10 @@ class Euclidean(Distance):
                          thresh=None,
                          verbose=False):
         """
-        method to remove points based on proximity threshold
-        :param thresh: proximity threshold (default: 90th percentile) valid values: 1-99
+        method to remove points based on proximity threshold.
+        Samples beyond this distance threshold will be removed.
+
+        :param thresh: proximity threshold in percentile (default: 90th percentile, valid values: 1-99)
         :param verbose: If steps should be displayed
         :return: None
         """
