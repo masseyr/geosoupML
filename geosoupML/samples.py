@@ -515,10 +515,14 @@ class Samples:
         fold_samples = list()
 
         for fold_samp in nsamp_list:
-
-            val_index = np.random.choice(index_list,
-                                         size=fold_samp,
-                                         replace=False)
+            if index_list.shape[0] < (2 * fold_samp):
+                val_index = np.random.choice(index_list,
+                                             size=fold_samp,
+                                             replace=False)
+            else:
+                val_index = np.random.choice(index_list,
+                                             size=fold_samp,
+                                             replace=False)
 
             trn_index = self.index[~np.in1d(self.index, val_index)]
             index_list = index_list[~np.in1d(index_list, val_index)]
