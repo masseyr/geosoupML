@@ -23,3 +23,6 @@ geosoupML.egg-info/dependency_links.txt
 geosoupML.egg-info/PKG-INFO
 geosoupML.egg-info/requires.txt
 geosoupML.egg-info/SOURCES.txt
+*.whl
+*.gz
+*.txt
