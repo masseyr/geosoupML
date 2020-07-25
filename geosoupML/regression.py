@@ -4,6 +4,7 @@ from scipy import stats
 from math import sqrt
 from sklearn import linear_model
 from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import GridSearchCV
 from sklearn.metrics import mean_squared_error
 from geosoup.common import Handler, Opt
 from geosoup.raster import Raster, np, gdal_array, gdal
@@ -27,6 +28,7 @@ class _Regressor(object):
                  data=None,
                  regressor=None,
                  **kwargs):
+
         self.data = data
         self.vdata = None
         self.regressor = regressor
@@ -37,8 +39,19 @@ class _Regressor(object):
         self.training_results = dict()
         self.fit = False
         self.all_cv_results = None
+        self.cv_param = None
 
         self.adjustment = dict()
+
+        if hasattr(self.regressor, 'intercept_'):
+            self.intercept = self.regressor.intercept_
+        else:
+            self.intercept = None
+
+        if hasattr(self.regressor, 'coef_'):
+            self.coefficient = self.regressor.coef_
+        else:
+            self.coefficient = None
 
         if kwargs is not None:
             if 'timer' in kwargs:
@@ -69,18 +82,6 @@ class _Regressor(object):
         self.label = data['label_name']
         self.fit = True
 
-        if hasattr(self, 'intercept'):
-            if hasattr(self.regressor, 'intercept_'):
-                self.intercept = self.regressor.intercept_
-
-        if hasattr(self, 'coefficient'):
-            if hasattr(self.regressor, 'coef_'):
-                self.coefficient = self.regressor.coef_
-
-    def predict(self, *args, **kwargs):
-        """Placeholder function"""
-        return
-
     def pickle_it(self,
                   outfile):
         """
@@ -91,9 +92,8 @@ class _Regressor(object):
         with open(outfile, 'wb') as fileptr:
             pickle.dump(self, fileptr)
 
-    @classmethod
-    def load_from_pickle(cls,
-                         infile):
+    @staticmethod
+    def load_from_pickle(infile):
         """
         Reload regressor from file
         :param infile: File to load regressor from
@@ -102,12 +102,50 @@ class _Regressor(object):
             regressor_obj = pickle.load(fileptr)
             return regressor_obj
 
+    def grid_search_param(self,
+                          param_dict,
+                          scoring='score',
+                          cv_folds=5,
+                          n_jobs=1,
+                          allowed_grad=0.1,
+                          select_perc=90):
+        """
+        Method to search optimal parameters for the regressor
+        :param param_dict:
+        :param scoring:
+        :param cv_folds:
+        :param n_jobs:
+        :param allowed_grad:
+        :param select_perc:
+        """
+        model = GridSearchCV(self.regressor,
+                             param_dict,
+                             scoring=scoring,
+                             cv=cv_folds,
+                             n_jobs=n_jobs)
+
+        results = model.cv_results_
+
+        params = results['params']
+        mean_scores = results['mean_test_score']
+        std_scores = results['std_test_score']
+        ranks = results['rank_test_scores']
+
+        grad_cond = (std_scores.max() - std_scores.min())/std_scores.max() <= allowed_grad
+
+        if not grad_cond:
+            param = params[np.where(mean_scores == np.percentile(mean_scores,
+                                                                 select_perc,
+                                                                 interpolation='nearest'))]
+        else:
+            param = params[np.where(ranks == 1)]
+
+        self.cv_param = param
+
     @staticmethod
-    def get_defaults(raster=None,
-                     **kwargs):
+    def get_defaults(**kwargs):
         """
         Method to define default parameters for regressor
-        :param raster: Raster object (see geosoup.Raster)
         :param kwargs: Keyword arguments
         """
 
@@ -118,7 +156,7 @@ class _Regressor(object):
             'llim': 0.025,
             'variance_limit': 0.05,
             'min_rsq_limit': 60.0,
-            'n_random': 5,
+            'n_rand': 5,
             'uncert_dict': {},
             'half_range': True,
             'tile_size': 512,
@@ -137,7 +175,9 @@ class _Regressor(object):
 
         defaults.update(kwargs)
 
-        if raster is not None:
+        if 'raster' in kwargs and type(kwargs['raster']) == Raster:
+            raster = kwargs['raster']
+
             if not raster.init:
                 raster.initialize()
 
@@ -243,7 +283,7 @@ class _Regressor(object):
         kwargs.update({'out_data_type':
                        gdal_array.NumericTypeCodeToGDALTypeCode(regressor.data['labels'].dtype)})
 
-        defaults = _Regressor.get_defaults(raster_obj,
+        defaults = _Regressor.get_defaults(raster=raster_obj,
                                            **kwargs)
 
         output_type = defaults['output_type'] if output_type is None else output_type
@@ -1022,7 +1062,7 @@ class RFRegressor(_Regressor):
         :return: range of uncertainty values if one or more uncertainty bands
                  are specified in uncertainty dict else returns 0
         """
-        defaults = _Regressor.get_defaults(kwargs)
+        defaults = _Regressor.get_defaults(**kwargs)
 
         uncert_dict = defaults['uncert_dict']
         regressor = defaults['regressor']
@@ -1030,8 +1070,9 @@ class RFRegressor(_Regressor):
         if uncert_dict is None or len(uncert_dict) == 0:
             raise RuntimeError("No uncertainty band dictionary provided")
 
-        if regressor is None:
-            raise RuntimeError("Regressor must be supplied to calculate uncertainty ranges")
+        if type(regressor) != _Regressor:
+            raise RuntimeError("Regressor must be supplied to calculate uncertainty ranges" +
+                               "Regressor must be of _Regressor class")
 
         n_rand = defaults['n_rand']
         output_type = defaults['output_type']
@@ -1119,7 +1160,7 @@ class RFRegressor(_Regressor):
                            False  - full range (x +/- a), or
                            True   - half range (x +/- a/2)
         """
-        defaults = self.get_defaults(kwargs)
+        defaults = self.get_defaults(**kwargs)
 
         output_type = defaults['output_type'] \
             if output_type is None else output_type
@@ -1350,7 +1391,7 @@ class RFRegressor(_Regressor):
                'var_y': Boolean (if variance of leaf nodes should be calculated)
                'sd_y': Boolean (if the standard dev of all values at a leaf should be calculated)
         """
-        defaults = self.get_defaults(kwargs)
+        defaults = self.get_defaults(**kwargs)
 
         output_type = defaults['output_type'] \
             if output_type is None else output_type
