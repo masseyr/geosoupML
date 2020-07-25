@@ -186,17 +186,18 @@ class Mahalanobis(Distance):
                 mdist[i] = np.nan
                 continue
 
-            prod = np.array(
-                            np.dot(
-                                np.dot(diff[i, :],
-                                       inv_cov_matrix),
-                                transpose_diff[:, i])
-                        )[0][0]
+            mdist_val = np.dot(np.dot(diff[i, :],
+                               inv_cov_matrix),
+                               transpose_diff[:, i])
 
-            if prod < 0:
+            if type(mdist_val) not in (float, int):
+                if type(mdist_val) in (list, tuple, np.ndarray):
+                    mdist_val = mdist_val[0]
+
+            if mdist_val < 0:
                 mdist[i] = np.nan
             else:
-                mdist[i] = np.sqrt(prod)
+                mdist[i] = np.sqrt(mdist_val)
 
         return list(mdist)
 
@@ -333,10 +334,8 @@ class Euclidean(Distance):
                          thresh=None,
                          verbose=False):
         """
-        method to remove points based on proximity threshold.
-        Samples beyond this distance threshold will be removed.
-
-        :param thresh: proximity threshold in percentile (default: 90th percentile, valid values: 1-99)
+        method to remove points based on proximity threshold
+        :param thresh: proximity threshold (default: 90th percentile) valid values: 1-99
         :param verbose: If steps should be displayed
         :return: None
         """
