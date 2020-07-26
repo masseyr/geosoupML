@@ -279,7 +279,6 @@ class Samples:
         self.ymin = self.y.min(initial=-self.max_allow_y)
         self.ymax = self.y.max(initial=self.max_allow_y)
 
-    @Timer.timing(True)
     def delete_column(self,
                       column_id=None,
                       column_name=None):
