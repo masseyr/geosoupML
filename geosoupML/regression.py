@@ -22,7 +22,6 @@ class _Regressor(object):
     """
     Regressor base class
     """
-    time_it = False
 
     def __init__(self,
                  data=None,
@@ -30,7 +29,6 @@ class _Regressor(object):
                  **kwargs):
 
         self.data = data
-        self.vdata = None
         self.regressor = regressor
         self.features = None
         self.feature_index = None
@@ -38,8 +36,6 @@ class _Regressor(object):
         self.output = None
         self.training_results = dict()
         self.fit = False
-        self.all_cv_results = None
-        self.cv_param = None
 
         self.adjustment = dict()
 
@@ -52,10 +48,6 @@ class _Regressor(object):
             self.coefficient = self.regressor.coef_
         else:
             self.coefficient = None
-
-        if kwargs is not None:
-            if 'timer' in kwargs:
-                _Regressor.time_it = kwargs['timer']
 
     def __repr__(self):
         return "<Regressor base class>"
@@ -103,44 +95,65 @@ class _Regressor(object):
             return regressor_obj
 
     def grid_search_param(self,
+                          data,
                           param_dict,
                           scoring='score',
                           cv_folds=5,
                           n_jobs=1,
+                          select=True,
                           allowed_grad=0.1,
                           select_perc=90):
         """
-        Method to search optimal parameters for the regressor
-        :param param_dict:
-        :param scoring:
-        :param cv_folds:
-        :param n_jobs:
-        :param allowed_grad:
-        :param select_perc:
+        Method to search optimal parameters for the regressor. If 'select' is True, then this method
+        will return a set of parameters with the best model score.
+        :param data: dictionary with values (generated using Samples.format_data())
+        :param param_dict: Dictionary of parameter grid to search for best score
+        :param scoring: Score metric callable method from the regressor
+        :param cv_folds: number of folds to divide the samples in
+        :param n_jobs: number of parallel processes to run the grid search
+        :param select: if the best set of parameters should be selected
+        :param allowed_grad: max allowable percent difference between min and max score
+        :param select_perc: percentile to choose for best model selection
         """
+        self.data = data
+
         model = GridSearchCV(self.regressor,
                              param_dict,
                              scoring=scoring,
                              cv=cv_folds,
                              n_jobs=n_jobs)
 
+        if self.regressor is not None:
+
+            if 'weights' not in data:
+                model.fit(data['features'], data['labels'])
+            else:
+                model.fit(data['features'], data['labels'], sample_weight=data['weights'])
+
+        self.features = data['feature_names']
+        self.label = data['label_name']
+
         results = model.cv_results_
 
         params = results['params']
-        mean_scores = results['mean_test_score']
-        std_scores = results['std_test_score']
+        scores_mean = results['mean_test_score']
+        scores_sd = results['std_test_score']
         ranks = results['rank_test_scores']
 
-        grad_cond = (std_scores.max() - std_scores.min())/std_scores.max() <= allowed_grad
-
-        if not grad_cond:
-            param = params[np.where(mean_scores == np.percentile(mean_scores,
-                                                                 select_perc,
-                                                                 interpolation='nearest'))]
+        if select:
+            grad_cond = (scores_sd.max() - scores_sd.min()) / scores_sd.max() <= allowed_grad
+            if not grad_cond:
+                param = params[np.where(scores_mean == np.percentile(scores_mean,
+                                                                     select_perc,
+                                                                     interpolation='nearest'))]
+            else:
+                param = params[np.where(ranks == 1)]
+            return param
         else:
-            param = params[np.where(ranks == 1)]
-
-        self.cv_param = param
+            return {'params': params,
+                    'scores_mean': scores_mean,
+                    'scores_sd': scores_sd,
+                    'rank': ranks}
 
     @staticmethod
     def get_defaults(**kwargs):
@@ -239,7 +252,7 @@ class _Regressor(object):
         return defaults
 
     @staticmethod
-    @Timer.timing(time_it)
+    @Timer.timing
     def regress_raster(regressor,
                        raster_obj,
                        outfile=None,
@@ -448,7 +461,7 @@ class _Regressor(object):
         return out_dict
 
     @staticmethod
-    @Timer.timing(True)
+    @Timer.timing
     def fit_regressor(args_list,
                       rank=None):
         """
@@ -488,7 +501,6 @@ class _Regressor(object):
 
             # initialize RF classifier
             model = RFRegressor(**param)
-            model.time_it = True
 
             regress_limit = [defaults['ulim_lower_multiplier'] * ulim,
                              defaults['ulim_upper_multiplier'] * ulim]
@@ -561,8 +573,6 @@ class MRegressor(_Regressor):
     This uses scikit-learn multiple regressor library
     """
 
-    time_it = False
-
     def __init__(self,
                  data=None,
                  regressor=None,
@@ -581,10 +591,6 @@ class MRegressor(_Regressor):
 
         self.intercept = self.regressor.intercept_ if hasattr(self.regressor, 'intercept_') else None
         self.coefficient = self.regressor.coef_ if hasattr(self.regressor, 'coef_') else None
-
-        if kwargs is not None:
-            if 'timer' in kwargs:
-                MRegressor.time_it = kwargs['timer']
 
     def __repr__(self):
         # gather which attributes exist
@@ -612,7 +618,7 @@ class MRegressor(_Regressor):
             # if empty return empty
             return "<Multiple Linear Regressor: __empty__>"
 
-    @Timer.timing(time_it)
+    @Timer.timing
     def predict(self,
                 arr,
                 ntile_max=5,
@@ -825,8 +831,6 @@ class RFRegressor(_Regressor):
     """Random Forest Regressor.
      This uses scikit-learn Random Forest regressor"""
 
-    time_it = False
-
     def __init__(self,
                  data=None,
                  regressor=None,
@@ -871,10 +875,6 @@ class RFRegressor(_Regressor):
         self.n_jobs = n_jobs
 
         self.dec_paths = list()
-
-        if kwargs is not None:
-            if 'timer' in kwargs:
-                MRegressor.time_it = kwargs['timer']
 
     def __repr__(self):
         # gather which attributes exist
@@ -1195,7 +1195,7 @@ class RFRegressor(_Regressor):
         else:
             return
 
-    @Timer.timing(time_it)
+    @Timer.timing
     def predict(self,
                 arr,
                 output_type=None,
@@ -1589,8 +1589,6 @@ class HRFRegressor(RFRegressor):
     (based on hierarchical regression of available features)
     """
 
-    time_it = False
-
     def __init__(self,
                  data=None,
                  regressor=None,
@@ -1632,7 +1630,7 @@ class HRFRegressor(RFRegressor):
             "\n---\nRegressors: \n---\n{}".format('\n'.join(repr_regressor)) + \
             "\n---\n\n"
 
-    @Timer.timing(time_it)
+    @Timer.timing
     def regress_raster(self,
                        raster_obj,
                        outfile=None,
