@@ -1,4 +1,4 @@
-## Geosoup Machine Learning library v0.1.11
+## Geosoup Machine Learning library v0.1.15
 
 [![DOI](https://zenodo.org/badge/259178307.svg)](https://zenodo.org/badge/latestdoi/259178307)
 
@@ -8,7 +8,7 @@ Currently implemented:
 
 `Random Forest Regressor`  
 `Multiple Linear Regressor`
-     
+
 
 Install using:
 
