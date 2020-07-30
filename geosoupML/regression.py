@@ -8,7 +8,6 @@ from sklearn.model_selection import GridSearchCV
 from sklearn.metrics import mean_squared_error
 from geosoup.common import Handler, Opt
 from geosoup.raster import Raster, np, gdal_array, gdal
-from geosoup.common import Timer
 
 
 __all__ = ['HRFRegressor',
@@ -94,10 +93,119 @@ class _Regressor(object):
             regressor_obj = pickle.load(fileptr)
             return regressor_obj
 
+    def get_training_fit(self,
+                         data=None,
+                         regress_limit=None,
+                         output_type='mean'):
+        """
+        Find out how well the training samples fit the model
+        :param data: Samples() instance
+        :param output_type: Metric to be omputed from the random forest (options: 'mean','median','sd')
+        :param regress_limit: List of upper and lower regression limits for training fit prediction
+        :return: None
+        """
+        if data is None:
+            data = self.data
+
+        if self.fit:
+            sample_predictions = getattr(self,
+                                         'sample_predictions',
+                                         None)
+
+            if callable(sample_predictions):
+                pred = sample_predictions(data,
+                                          regress_limit=regress_limit,
+                                          output_type=output_type)
+            else:
+                raise RuntimeError("Instance does not have sample_predictions() method")
+
+            self.training_results['rsq'] = pred['rsq'] * 100.0
+            self.training_results['slope'] = pred['slope']
+            self.training_results['intercept'] = pred['intercept']
+            self.training_results['rmse'] = pred['rmse']
+        else:
+            raise ValueError("Model not initialized with samples")
+
+    @staticmethod
+    def param_grid(param_dict):
+        """
+        Method to make list of parameters based on dictionary with parameter values
+        :param param_dict:  Dictionary of parameter grid values
+        :returns: List of parameter dictionaries
+        """
+        names = list(param_dict.keys())
+        values = list(param_dict.values())
+        grids = np.meshgrid(*values)
+        lists = [np.array(arr).flatten() for arr in grids]
+
+        return list(dict(zip(names, param)) for param in zip(*lists))
+
+    @staticmethod
+    def cv_result(regressor,
+                  samples,
+                  param_dict,
+                  n_folds=5,
+                  regress_limit=None,
+                  output_type='mean',
+                  use_weights=False,
+                  adjust=True,
+                  return_summary=True):
+        """
+        Find out how well the training samples fit the model
+        :param regressor: _Regressor child class
+        :param samples: data to get model fit on
+        :param param_dict: Paramters dictionary for _Regressor child class
+        :param n_folds: Number of folds to compute results for
+        :param use_weights: If weights should be used for model fit/training
+        :param adjust: If the gain and bias should be adjusted
+        :param return_summary: IF summary should be returned or non-summarized results
+        :param output_type: Metric to be omputed from the random forest (options: 'mean','median','sd')
+        :param regress_limit: List of upper and lower regression limits for training fit prediction
+        :return: None
+        """
+        regressor = regressor(data=samples,
+                              **param_dict)
+
+        folds = samples.make_folds(n_folds)
+
+        results = []
+
+        for trn_data, test_data in folds:
+            regressor.fit_data(trn_data.format_data(),
+                               use_weights=use_weights)
+
+            get_adjustment_param = getattr(regressor, 'get_adjustment_param', None)
+
+            if adjust and (get_adjustment_param is not None) and callable(get_adjustment_param):
+                get_adjustment_param(data_limits=regress_limit,
+                                     output_type=output_type)
+
+            pred = regressor.sample_predictions(test_data.format_data(),
+                                                regress_limit=regress_limit,
+                                                output_type=output_type)
+            results.append(pred)
+
+        if not return_summary:
+            return results
+        else:
+            _output = {'rsq_mean': np.mean([result['rsq'] for result in results]),
+                       'rsq_sd': np.std([result['rsq'] for result in results]),
+                       'rmse_mean': np.mean([result['rmse'] for result in results]),
+                       'rmse_sd': np.std([result['rmse'] for result in results]),
+                       'slope_mean': np.mean([result['slope'] for result in results]),
+                       'slope_sd': np.std([result['slope'] for result in results]),
+                       'intercept_mean': np.mean([result['intercept'] for result in results]),
+                       'intercept_sd': np.std([result['intercept'] for result in results])}
+
+            for fold_indx in range(n_folds):
+                _output.update({'rsq_fold_{}'.format(fold_indx + 1): results[fold_indx]['rsq']})
+                _output.update({'rmse_fold_{}'.format(fold_indx + 1): results[fold_indx]['rmse']})
+
+            return _output
+
     def grid_search_param(self,
                           data,
                           param_dict,
-                          scoring='score',
                           cv_folds=5,
                           n_jobs=1,
                           select=True,
@@ -108,37 +216,39 @@ class _Regressor(object):
         will return a set of parameters with the best model score.
         :param data: dictionary with values (generated using Samples.format_data())
         :param param_dict: Dictionary of parameter grid to search for best score
-        :param scoring: Score metric callable method from the regressor
         :param cv_folds: number of folds to divide the samples in
         :param n_jobs: number of parallel processes to run the grid search
         :param select: if the best set of parameters should be selected
         :param allowed_grad: max allowable percent difference between min and max score
         :param select_perc: percentile to choose for best model selection
         """
+
+        if self.regressor is None:
+            raise RuntimeError('Regressor not defined!')
+
         self.data = data
+        self.features = data['feature_names']
+        self.label = data['label_name']
 
         model = GridSearchCV(self.regressor,
                              param_dict,
-                             scoring=scoring,
                              cv=cv_folds,
                              n_jobs=n_jobs)
 
-        if self.regressor is not None:
-
-            if 'weights' not in data:
-                model.fit(data['features'], data['labels'])
-            else:
-                model.fit(data['features'], data['labels'], sample_weight=data['weights'])
-
-        self.features = data['feature_names']
-        self.label = data['label_name']
+        if 'weights' not in data:
+            model.fit(data['features'],
+                      data['labels'])
+        else:
+            model.fit(data['features'],
+                      data['labels'],
+                      sample_weight=data['weights'])
 
         results = model.cv_results_
 
         params = results['params']
         scores_mean = results['mean_test_score']
         scores_sd = results['std_test_score']
-        ranks = results['rank_test_scores']
+        ranks = results['rank_test_score']
 
         if select:
             grad_cond = (scores_sd.max() - scores_sd.min()) / scores_sd.max() <= allowed_grad
@@ -147,7 +257,7 @@ class _Regressor(object):
                                                                      select_perc,
                                                                      interpolation='nearest'))]
             else:
-                param = params[np.where(ranks == 1)]
+                param = params[ranks.index(1)]
             return param
         else:
             return {'params': params,
@@ -163,8 +273,6 @@ class _Regressor(object):
         """
 
         defaults = {
-            'ulim_upper_multiplier': 0.975,
-            'ulim_lower_multiplier': 0.025,
             'ulim': 0.975,
             'llim': 0.025,
             'variance_limit': 0.05,
@@ -252,13 +360,12 @@ class _Regressor(object):
         return defaults
 
     @staticmethod
-    @Timer.timing
     def regress_raster(regressor,
                        raster_obj,
                        outfile=None,
                        outdir=None,
-                       output_type=None,
-                       band_name=None,
+                       output_type='mean',
+                       band_name='band_1',
                        **kwargs):
         """
         Tree variance from the RF regressor
@@ -298,9 +405,6 @@ class _Regressor(object):
 
         defaults = _Regressor.get_defaults(raster=raster_obj,
                                            **kwargs)
-
-        output_type = defaults['output_type'] if output_type is None else output_type
-        band_name = defaults['band_name'] if band_name is None else band_name
 
         verbose = defaults['verbose'] if 'verbose' in defaults else False
         defaults['verbose'] = False
@@ -460,113 +564,6 @@ class _Regressor(object):
 
         return out_dict
 
-    @staticmethod
-    @Timer.timing
-    def fit_regressor(args_list,
-                      rank=None):
-        """
-        Method to train and validate classification models using MPI
-        and if the R-squared is > 0.5 then store the model and its
-        properties in a pickled file and csv file respectively
-
-        :param args_list: List of MPI scattered samples. Each element
-                        in the args_list includes a list in the given order of:
-                                name: Name of the model,
-                                train_samp: Samples object for training the classifier,
-                                valid_samp: Samples object for validating the classifier,
-                                in_file: input file containing the samples
-                                pickle_dir: folder to store the pickled classifier in)
-                                llim: lower limit
-                                ulim: upper limit
-                                param: RFRegressor initialization parameters
-
-        :param rank: rank of the MPI node/processor
-
-        :returns: tuple (r-squared*100 , model_name)
-        """
-        sep = Handler().sep
-
-        result_list = list()
-
-        defaults = _Regressor.get_defaults()
-
-        Opt.cprint('Length of arguments at {} is {}'.format(str(rank), len(args_list)))
-
-        if args_list is None:
-            args_list = list()
-
-        for args in args_list:
-
-            name, train_samp, valid_samp, in_file, pickle_dir, llim, ulim, param = args
-
-            # initialize RF classifier
-            model = RFRegressor(**param)
-
-            regress_limit = [defaults['ulim_lower_multiplier'] * ulim,
-                             defaults['ulim_upper_multiplier'] * ulim]
-
-            rsq_limit = defaults['min_rsq_limit']
-
-            # fit RF classifier using training data
-            model.fit_data(train_samp.format_data())
-
-            # predict using held out samples and print to file
-            pred = model.sample_predictions(valid_samp.format_data(),
-                                            regress_limit=regress_limit)
-
-            out_dict = dict()
-            out_dict['name'] = Handler(in_file).basename.split('.')[0] + name
-            out_dict['rsq'] = pred['rsq'] * 100.0
-            out_dict['slope'] = pred['slope']
-            out_dict['intercept'] = pred['intercept']
-            out_dict['rmse'] = pred['rmse']
-
-            model.output = out_dict
-
-            rsq = pred['rsq'] * 100.0
-            slope = pred['slope']
-            intercept = pred['intercept']
-            rmse = pred['rmse']
-
-            if rsq >= rsq_limit:
-                if intercept > regress_limit[0]:
-                    model.adjustment['bias'] = -1.0 * (intercept / slope)
-
-                model.adjustment['gain'] = 1.0 / slope
-                model.adjustment['upper_limit'] = ulim
-                model.adjustment['lower_limit'] = llim
-
-                # file to write the model run output to
-                outfile = pickle_dir + sep + \
-                    Handler(in_file).basename.split('.')[0] + name + '.txt'
-                outfile = Handler(filename=outfile).file_remove_check()
-
-                # save RF classifier using pickle
-                picklefile = pickle_dir + sep + \
-                    Handler(in_file).basename.split('.')[0] + name + '.pickle'
-                picklefile = Handler(filename=picklefile).file_remove_check()
-
-                # predict using the model to store results in a file
-                pred = model.sample_predictions(valid_samp.format_data(),
-                                                outfile=outfile,
-                                                picklefile=picklefile,
-                                                regress_limit=regress_limit)
-
-                out_dict['rsq'] = pred['rsq'] * 100.0
-                out_dict['slope'] = pred['slope']
-                out_dict['intercept'] = pred['intercept']
-                out_dict['rmse'] = pred['rmse']
-
-                out_dict['regress_low_limit'] = regress_limit[0]
-                out_dict['regress_up_limit'] = regress_limit[1]
-
-                model.output.update(out_dict)
-                model.pickle_it(picklefile)
-
-            result_list.append(out_dict)
-
-        return result_list
-
 
 class MRegressor(_Regressor):
     """Multiple linear regressor
@@ -576,25 +573,37 @@ class MRegressor(_Regressor):
     def __init__(self,
                  data=None,
                  regressor=None,
-                 intercept=True,
-                 jobs=1,
+                 fit_intercept=True,
+                 n_jobs=1,
                  normalize=False,
                  **kwargs):
-
+        """
+        Instantiate MRegressor class
+        :param data:  Data as Samples() instance
+        :param regressor: Linear regressor
+        :param fit_intercept: Whether to calculate the intercept for this model (default: True)
+        :param n_jobs: The number of jobs to use for the computation
+        :param normalize: If True, the regressors X will be normalized before regression by
+                          subtracting the mean and dividing by the l2-norm
+        :param kwargs: Other Key word arguments
+        """
         super(MRegressor, self).__init__(data,
                                          regressor)
         if self.regressor is None:
             self.regressor = linear_model.LinearRegression(copy_X=True,
-                                                           fit_intercept=intercept,
-                                                           n_jobs=jobs,
+                                                           fit_intercept=fit_intercept,
+                                                           n_jobs=n_jobs,
                                                            normalize=normalize)
 
         self.intercept = self.regressor.intercept_ if hasattr(self.regressor, 'intercept_') else None
-        self.coefficient = self.regressor.coef_ if hasattr(self.regressor, 'coef_') else None
+        self.coefficients = self.regressor.coef_ if hasattr(self.regressor, 'coef_') else None
 
     def __repr__(self):
+        """
+        Representation of MRegressor instance
+        """
         # gather which attributes exist
-        attr_truth = [self.coefficient is not None,
+        attr_truth = [self.coefficients is not None,
                       self.intercept is not None]
 
         if any(attr_truth):
@@ -604,7 +613,7 @@ class MRegressor(_Regressor):
             # strings to be printed for each attribute
             if attr_truth[0]:
                 print_str_list.append("Coefficients: {}\n".format(', '.join([str(elem) for elem in
-                                                                             self.coefficient.tolist()])))
+                                                                             self.coefficients.tolist()])))
 
             if attr_truth[1]:
                 print_str_list.append("Intercept: {}\n".format(self.intercept))
@@ -618,7 +627,6 @@ class MRegressor(_Regressor):
             # if empty return empty
             return "<Multiple Linear Regressor: __empty__>"
 
-    @Timer.timing
     def predict(self,
                 arr,
                 ntile_max=5,
@@ -718,14 +726,10 @@ class MRegressor(_Regressor):
 
     def sample_predictions(self,
                            data,
-                           picklefile=None,
-                           outfile=None,
                            **kwargs):
         """
         Get predictions from the multiple regressor
         :param data: Dictionary object from Samples.format_data
-        :param picklefile: Random Forest pickle file
-        :param outfile: output csv file name
         """
         if 'verbose' in kwargs:
             verbose = kwargs['verbose']
@@ -744,59 +748,14 @@ class MRegressor(_Regressor):
         # r-squared of predicted versus actual
         lm = self.linear_regress(data['labels'], y)
 
-        # if either one of outfile or pickle file are available
-        # then raise error
-        if (outfile is not None) != (picklefile is not None):
-            raise ValueError("Missing outfile or picklefile")
-
-        # if outfile and pickle file are both available
-        # then write to file and proceed to return
-        elif outfile is not None:
-            # write y, y_hat_bar, var_y to file (<- rows in this order)
-            y_list = []
-            y_list += y.tolist()
-            out_list = ['obs_y,' + ', '.join([str(elem) for elem in data['labels'].tolist()]),
-                        'pred_y,' + ', '.join([str(elem) for elem in y_list]),
-                        'rmse,' + str(rmse),
-                        'rsq,' + str(lm['rsq']),
-                        'slope,' + str(lm['slope']),
-                        'intercept,' + str(lm['intercept']),
-                        'rf_file,' + picklefile]
-
-            # write the list to file
-            Handler(filename=outfile).write_list_to_file(out_list)
-
-        # if outfile and pickle file are not provided,
-        # then only return values
         return {
-            'pred_y': y,
-            'obs_y': data['labels'],
+            'pred': y,
+            'labels': data['labels'],
             'rmse': rmse,
             'rsq': lm['rsq'],
             'slope': lm['slope'],
             'intercept': lm['intercept'],
-            'model': {'intercept': self.intercept, 'coefficient': self.coefficient}
         }
-
-    def get_training_fit(self,
-                         regress_limit=None):
-
-        """
-        Find out how well the training samples fit the model
-        :param regress_limit: List of upper and lower regression limits for training fit prediction
-        :return: None
-        """
-        if self.fit:
-            # predict using held out samples and print to file
-            pred = self.sample_predictions(self.data,
-                                           regress_limit=regress_limit)
-
-            self.training_results['rsq'] = pred['rsq'] * 100.0
-            self.training_results['slope'] = pred['slope']
-            self.training_results['intercept'] = pred['intercept']
-            self.training_results['rmse'] = pred['rmse']
-        else:
-            raise ValueError("Model not initialized with samples")
 
     def get_adjustment_param(self,
                              clip=0.025,
@@ -834,42 +793,46 @@ class RFRegressor(_Regressor):
     def __init__(self,
                  data=None,
                  regressor=None,
-                 trees=10,
-                 samp_split=2,
-                 samp_leaf=1,
+                 n_estimators=10,
+                 min_samples_split=2,
+                 min_samples_leaf=1,
                  max_depth=None,
-                 max_feat='auto',
+                 max_features='auto',
                  oob_score=False,
                  criterion='mse',
                  n_jobs=1,
                  **kwargs):
         """
         Initialize RF regressor using class parameters
-        :param trees: Number of trees
-        :param samp_split: Minimum number of samples for split
+        :param data: Data as Samples() instance
+        :param regressor: Random forest regressor
+        :param n_estimators: Number of trees
+        :param min_samples_split: min number of data points placed in a node before the node is split
+        :param min_samples_leaf: min number of data points allowed in a leaf node
+        :param max_depth: max number of levels in each decision tree of the random forest
+        :param max_features: max number of features considered for splitting a node
         :param oob_score: (bool) calculate out of bag score
         :param criterion: criterion to be used (default: 'mse', options: 'mse', 'mae')
-        (some parameters are as detailed in
-        http://scikit-learn.org/stable/modules/generated/sklearn.ensemble.RandomForestRegressor.html)
+        :param n_jobs: Number of parallel processes to run the regressor on
         """
 
         super(RFRegressor, self).__init__(data,
                                           regressor)
 
         if self.regressor is None:
-            self.regressor = RandomForestRegressor(n_estimators=trees,
+            self.regressor = RandomForestRegressor(n_estimators=n_estimators,
                                                    max_depth=max_depth,
-                                                   min_samples_split=samp_split,
-                                                   min_samples_leaf=samp_leaf,
-                                                   max_features=max_feat,
+                                                   min_samples_split=min_samples_split,
+                                                   min_samples_leaf=min_samples_leaf,
+                                                   max_features=max_features,
                                                    criterion=criterion,
                                                    oob_score=oob_score,
                                                    n_jobs=n_jobs)
-        self.trees = trees
+        self.n_estimators = n_estimators
         self.max_depth = max_depth
-        self.samp_split = samp_split
-        self.samp_leaf = samp_leaf
-        self.max_feat = max_feat
+        self.min_samples_split = min_samples_split
+        self.min_samples_leaf = min_samples_leaf
+        self.max_features = max_features
         self.oob_score = oob_score
         self.criterion = criterion
         self.n_jobs = n_jobs
@@ -914,19 +877,14 @@ class RFRegressor(_Regressor):
 
     def regress_tile(self,
                      arr,
-                     tile_start=None,
-                     tile_end=None,
-                     output_type=None,
+                     output_type='mean',
                      nodatavalue=None,
-                     intvl=None,
                      min_variance=None,
                      **kwargs):
 
         """
         Method to regress each tile of the image using one RF regressor
         :param arr: input 2D array to process (rows = elements, columns = features)
-        :param tile_start: pixel location of tile start
-        :param tile_end: pixel location of tile end
         :param output_type: Type of output to produce,
                choices: ['sd', 'var', 'full', 'mean', 'median']
                where 'sd' is for standard deviation,
@@ -935,25 +893,12 @@ class RFRegressor(_Regressor):
                'median' is for median of tree outputs
                'mean' is for mean of tree outputs
         :param nodatavalue: No data value
-        :param intvl: Prediction interval width (default: 95 percentile)
         :param min_variance: Minimum variance after which to cutoff
         :return: numpy 1-D array
         """
-        defaults = self.get_defaults()
 
         if min_variance is None:
-            if intvl is not None:
-                min_variance = (1 - intvl/100.) * np.min(arr.astype(np.float32))
-            else:
-                min_variance = defaults['variance_limit'] * np.min(arr.astype(np.float32))
-
-        output_type = defaults['output_type'] if output_type is None else output_type
-
-        if tile_end is None:
-            tile_end = arr.shape[0]
-
-        if tile_start is None:
-            tile_start = 0
+            min_variance = 0.025 * (self.data['labels'].max() - self.data['labels'].min())
 
         # List of index of bands to be used for regression
         if 'feature_index' in kwargs:
@@ -969,7 +914,7 @@ class RFRegressor(_Regressor):
         band_additives = np.repeat(0.0, feature_index.shape[0]) if 'band_additives' not in kwargs \
             else kwargs['band_additives']
 
-        feat_arr = arr[tile_start:tile_end, feature_index] * \
+        feat_arr = arr * \
             band_multipliers[feature_index] + \
             band_additives[feature_index]
 
@@ -979,12 +924,12 @@ class RFRegressor(_Regressor):
                                            0,
                                            feat_arr)
         else:
-            mask_arr = np.zeros([feat_arr.shape[1]]) + 1
+            mask_arr = np.zeros([feat_arr.shape[0]]) + 1
 
-        out_tile = np.zeros([tile_end - tile_start])
-        tile_arr = np.zeros([self.trees, (tile_end - tile_start)])
+        out_tile = np.zeros(feat_arr.shape[0])
+        tile_arr = np.zeros([self.n_estimators, feat_arr.shape[0]])
 
-        if output_type in ('mean', 'mean', 'full'):
+        if output_type in ('mean', 'median', 'full'):
 
             # calculate tree predictions for each pixel in a 2d array
             for jj, tree_ in enumerate(self.regressor.estimators_):
@@ -1018,7 +963,8 @@ class RFRegressor(_Regressor):
                 out_tile = out_tile ** 0.5
 
         else:
-            raise RuntimeError("Unknown output type or no output type specified")
+            raise RuntimeError("Unknown output type or no output type specified."
+                               "\nValid output types: mean, median, sd, var, full")
 
         if len(self.adjustment) > 0:
 
@@ -1042,30 +988,38 @@ class RFRegressor(_Regressor):
         return out_tile
 
     @staticmethod
-    def pixel_range(pixel_vec,
+    def pixel_range(regressor,
+                    pixel_vec,
+                    uncert_dict=None,
+                    n_rand=5,
+                    half_range=True,
+                    output_type='mean',
                     **kwargs):
         """
         Method to compute range of regression uncertainty for each pixel
         :param pixel_vec: Input pixel vector containing feature and uncertainty bands
         :param kwargs: Additional keyword arguments to be passed on to
 
-                      regressor: RFRegressor object
-                      uncert_dict: Dictionary specifying the indices of
-                                   feature bands (keys) and their corresponding
-                                   uncertainty bands (values)
-                      n_rand: Number of random values to generate
-                              in the uncertainty range (default: 5)
-                      half_range: If the input and output uncertainty values are
-                             - full range (x +/- a), or
-                             - half range (x +/- a/2)
+        :param regressor: RFRegressor object
+        :param uncert_dict: Dictionary specifying the indices of
+                   feature bands (keys) and their corresponding
+                   uncertainty bands (values)
+        :param output_type: Type of output to produce,
+               choices: ['sd', 'var', 'full', 'mean', 'median']
+               where 'sd' is for standard deviation,
+               'var' is for variance
+               'full is for all leaf outputs
+               'median' is for median of tree outputs
+               'mean' is for mean of tree outputs
+        :param n_rand: Number of random values to generate
+              in the uncertainty range (default: 5)
+        :param half_range: If the input and output uncertainty values are
+             - full range (x +/- a), or
+             - half range (x +/- a/2)
 
         :return: range of uncertainty values if one or more uncertainty bands
                  are specified in uncertainty dict else returns 0
         """
-        defaults = _Regressor.get_defaults(**kwargs)
-
-        uncert_dict = defaults['uncert_dict']
-        regressor = defaults['regressor']
 
         if uncert_dict is None or len(uncert_dict) == 0:
             raise RuntimeError("No uncertainty band dictionary provided")
@@ -1074,9 +1028,6 @@ class RFRegressor(_Regressor):
             raise RuntimeError("Regressor must be supplied to calculate uncertainty ranges" +
                                "Regressor must be of _Regressor class")
 
-        n_rand = defaults['n_rand']
-        output_type = defaults['output_type']
-
         n_samp = n_rand ** len(uncert_dict)
 
         if n_samp > 0:
@@ -1084,8 +1035,6 @@ class RFRegressor(_Regressor):
 
             feat_vals = pixel_vec[uncert_dict.keys()].tolist()
             uncert_vals = pixel_vec[uncert_dict.values()].tolist()
-
-            half_range = defaults['half_range']
 
             if half_range:
                 uncert_rand_lists = list((np.random.rand(n_rand) - 0.5) * uncert_val + feat_vals[ii] for
@@ -1110,20 +1059,16 @@ class RFRegressor(_Regressor):
 
     def regress_tile_uncert(self,
                             arr,
-                            tile_start=None,
-                            tile_end=None,
-                            output_type=None,
+                            output_type='mean',
+                            uncert_type='sd',
                             uncert_dict=None,
                             n_rand=5,
                             half_range=True,
                             compare_uncert=False,
-                            calculated_uncert_type=None,
                             **kwargs):
         """
         Method to regress each tile of the image and compute range of uncertainty values from one RF regressor
         :param arr: input 2D array to process (rows = elements, columns = features)
-        :param tile_start: pixel location of tile start
-        :param tile_end: pixel location of tile end
         :param output_type: Type of output to produce,
                choices: ['sd', 'var', 'full', 'mean', 'median']
                where 'sd' is for standard deviation,
@@ -1141,7 +1086,7 @@ class RFRegressor(_Regressor):
         :param compare_uncert: Boolean. Compare the propagated uncertainty with
                               uncertainty in RF regression output value
                               and return the larger of the two (default: False)
-        :param calculated_uncert_type: Type of value to compute as uncertainty of prediction
+        :param uncert_type: Type of value to compute as uncertainty of prediction (options: 'sd', 'var')
         :param kwargs: Keyword arguments:
                 ntile_max: Maximum number of tiles up to which the
                            input image or array is processed without tiling (default = 9).
@@ -1160,13 +1105,6 @@ class RFRegressor(_Regressor):
                            False  - full range (x +/- a), or
                            True   - half range (x +/- a/2)
         """
-        defaults = self.get_defaults(**kwargs)
-
-        output_type = defaults['output_type'] \
-            if output_type is None else output_type
-
-        calculated_uncert_type = defaults['calculated_uncert_type'] \
-            if calculated_uncert_type is None else calculated_uncert_type
 
         if uncert_dict is not None:
             kwargs.update({'regressor': self,
@@ -1177,14 +1115,12 @@ class RFRegressor(_Regressor):
 
             propagated_uncert = np.apply_along_axis(self.pixel_range,
                                                     1,
-                                                    arr[tile_start:tile_end, :],
+                                                    arr,
                                                     **kwargs)
 
             if compare_uncert:
                 calculated_uncert = self.regress_tile(arr,
-                                                      tile_start,
-                                                      tile_end,
-                                                      output_type=calculated_uncert_type,
+                                                      output_type=uncert_type,
                                                       **kwargs)
 
                 return np.apply_along_axis(lambda x: np.max(x),
@@ -1195,7 +1131,6 @@ class RFRegressor(_Regressor):
         else:
             return
 
-    @Timer.timing
     def predict(self,
                 arr,
                 output_type=None,
@@ -1217,10 +1152,6 @@ class RFRegressor(_Regressor):
                        'full' is for the full spectrum of the leaf nodes' prediction
 
         :param kwargs: Keyword arguments:
-                        ntile_max: Maximum number of tiles up to which the
-                                   input image or array is processed without tiling (default = 5).
-                                   You can choose any (small) number that suits the available memory.
-                        tile_size: Number of pixels in each tile (default = 102400)
                         gain: Adjustment of the predicted output by linear adjustment of gain (slope)
                         bias: Adjustment of the predicted output by linear adjustment of bias (intercept)
                         upper_limit: Limit of maximum value of prediction
@@ -1239,148 +1170,48 @@ class RFRegressor(_Regressor):
         if not type(arr) == np.ndarray:
             arr = np.array(arr)
 
-        defaults = _Regressor.get_defaults(**kwargs)
+        verbose = kwargs['verbose'] if 'verbose' in kwargs else False
 
-        output_type = defaults['output_type'] \
-            if output_type is None else output_type
+        kwargs.update({'output_type': output_type})
 
-        verbose = defaults['verbose'] if 'verbose' in defaults else False
+        if 'uncert_dict' in kwargs:
+            uncert_dict = kwargs['uncert_dict']
+        else:
+            uncert_dict = None
 
-        uncert_dict = defaults['uncert_dict']
-        tile_size = defaults['tile_size'] ** 2
-        n_tile_max = defaults['n_tile_max']
-
-        for key, value in defaults.items():
+        for key, value in kwargs.items():
             if key in ('gain', 'bias', 'upper_limit', 'lower_limit'):
-                if defaults[key] is not None:
+                if kwargs[key] is not None:
                     self.adjustment[key] = value
 
-        # define output array
-        if output_type == 'full':
-            out_arr = np.zeros([self.trees, arr.shape[0]])
+        if uncert_dict is not None and type(uncert_dict) == dict and len(uncert_dict) > 0:
+            out_arr = self.regress_tile_uncert(arr,
+                                               **kwargs)
         else:
-            out_arr = np.zeros(arr.shape[0])
-
-        # input image size
-        npx_inp = int(arr.shape[0])  # number of pixels in input image
-        nb_inp = int(arr.shape[1])  # number of bands in input image
-
-        # size of tiles
-        npx_tile = int(tile_size)  # pixels in each tile
-        npx_last = npx_inp % npx_tile  # pixels in last tile
-        ntiles = (npx_inp // npx_tile) + 1  # total tiles
-
-        if ntiles > n_tile_max:
-
-            for i in range(0, ntiles - 1):
-                if verbose:
-                    Opt.cprint('Processing tile {} of {}'.format(str(i+1), ntiles),
-                               newline='')
-
-                if output_type == 'full':
-                    if uncert_dict is not None and type(uncert_dict) == dict:
-                        temp_tile_ = self.regress_tile_uncert(arr,
-                                                              i * npx_tile,
-                                                              (i + 1) * npx_tile,
-                                                              output_type,
-                                                              **kwargs)
-                    else:
-                        temp_tile_ = self.regress_tile(arr,
-                                                       i * npx_tile,
-                                                       (i + 1) * npx_tile,
-                                                       **kwargs)
-
-                    out_arr[:, i * npx_tile:(i + 1) * npx_tile] = temp_tile_
-                    if verbose:
-                        Opt.cprint(' min {} max {}'.format(np.min(temp_tile_), np.max(temp_tile_)))
-
-                else:
-                    if uncert_dict is not None and type(uncert_dict) == dict:
-                        temp_tile_ = self.regress_tile_uncert(arr,
-                                                              i * npx_tile,
-                                                              (i + 1) * npx_tile,
-                                                              **kwargs)
-                    else:
-                        temp_tile_ = self.regress_tile(arr,
-                                                       i * npx_tile,
-                                                       (i + 1) * npx_tile,
-                                                       **kwargs)
-
-                    out_arr[i * npx_tile:(i + 1) * npx_tile] = temp_tile_
-                    if verbose:
-                        Opt.cprint(' min {} max {}'.format(np.min(temp_tile_), np.max(temp_tile_)))
-
-            if npx_last > 0:  # number of total pixels for the last tile
-
-                i = ntiles - 1
-                if verbose:
-                    Opt.cprint('Processing tile {} of {}'.format(str(i+1), ntiles),
-                               newline='')
-
-                if output_type == 'full':
-                    if uncert_dict is not None and type(uncert_dict) == dict:
-                        temp_tile_ = self.regress_tile_uncert(arr,
-                                                              i * npx_tile,
-                                                              i * npx_tile + npx_last,
-                                                              **kwargs)
-                    else:
-                        temp_tile_ = self.regress_tile(arr,
-                                                       i * npx_tile,
-                                                       i * npx_tile + npx_last,
-                                                       **kwargs)
-
-                    out_arr[:, i * npx_tile:(i * npx_tile + npx_last)] = temp_tile_
-                    if verbose:
-                        Opt.cprint(' min {} max {}'.format(np.min(temp_tile_), np.max(temp_tile_)))
-
-                else:
-                    if uncert_dict is not None and type(uncert_dict) == dict:
-                        temp_tile_ = self.regress_tile_uncert(arr,
-                                                              i * npx_tile,
-                                                              i * npx_tile + npx_last,
-                                                              **kwargs)
-                    else:
-                        temp_tile_ = self.regress_tile(arr,
-                                                       i * npx_tile,
-                                                       i * npx_tile + npx_last,
-                                                       **kwargs)
-
-                    out_arr[i * npx_tile:(i * npx_tile + npx_last)] = temp_tile_
-                    if verbose:
-                        Opt.cprint(' min {} max {}'.format(np.min(temp_tile_), np.max(temp_tile_)))
-
-        else:
-            if verbose:
-                Opt.cprint('Processing tile 1 of 1',
-                           newline='')
-            if uncert_dict is not None and type(uncert_dict) == dict and len(uncert_dict) > 0:
-                out_arr = self.regress_tile_uncert(arr,
-                                                   0,
-                                                   npx_inp,
-                                                   **kwargs)
-            else:
-                out_arr = self.regress_tile(arr,
-                                            0,
-                                            npx_inp,
-                                            **kwargs)
-            if verbose:
-                Opt.cprint(' min {} max {}'.format(np.min(out_arr), np.max(out_arr)))
+            out_arr = self.regress_tile(arr,
+                                        **kwargs)
+        if verbose:
+            Opt.cprint(' min {} max {}'.format(np.min(out_arr), np.max(out_arr)))
 
         return out_arr
 
+    def var_importance(self):
+        """
+        Return list of tuples of band names and their importance
+        """
+
+        return [(band, importance) for band, importance in
+                zip(self.data['feature_names'], self.regressor.feature_importances_)]
+
     def sample_predictions(self,
                            data,
-                           picklefile=None,
-                           outfile=None,
-                           output_type=None,
+                           output_type='mean',
                            **kwargs):
         """
         Get tree predictions from the RF regressor
         :param data: Dictionary object from Samples.format_data
-        :param picklefile: Random Forest pickle file
-        :param output_type: Metric to be computed from RandomForestRegressor
-                            (options: 'mean','median','sd')
-        :param outfile: output csv file name
+        :param output_type: Metric to be computed from RandomForestRegressor.
+                           (options: 'mean','median','sd', 'var','full')
         :param kwargs: Keyword arguments:
                'gain': Adjustment of the predicted output by linear adjustment of gain (slope)
                'bias': Adjustment of the predicted output by linear adjustment of bias (intercept)
@@ -1391,10 +1222,6 @@ class RFRegressor(_Regressor):
                'var_y': Boolean (if variance of leaf nodes should be calculated)
                'sd_y': Boolean (if the standard dev of all values at a leaf should be calculated)
         """
-        defaults = self.get_defaults(**kwargs)
-
-        output_type = defaults['output_type'] \
-            if output_type is None else output_type
 
         for key, value in kwargs.items():
             if key in ('gain', 'bias', 'upper_limit', 'lower_limit'):
@@ -1412,141 +1239,36 @@ class RFRegressor(_Regressor):
         else:
             regress_limit = None
 
-        var_y = all_y = sd_y = mean = pred_y = None
+        prediction = self.predict(data['features'],
+                                  output_type=output_type,
+                                  verbose=verbose)
 
-        # calculate variance of tree predictions
-        if 'var_y' in kwargs and kwargs['var_y']:
-            var_y = self.predict(data['features'],
-                                 output_type='var',
-                                 verbose=verbose)
-
-        # calculate mean of tree predictions
-        if 'all_y' in kwargs and kwargs['all_y']:
-            all_y = self.predict(data['features'],
-                                 output_type='full',
-                                 verbose=verbose)
-
-        # calculate sd of tree predictions
-        if 'sd_y' in kwargs and kwargs['sd_y']:
-            sd_y = self.predict(data['features'],
-                                output_type='sd',
-                                verbose=verbose)
-
-        # calculate sd of tree predictions
-        if 'mean' in kwargs and kwargs['se_y']:
-            mean = self.predict(data['features'],
-                                output_type='mean',
-                                verbose=verbose)
-
-        # calculate median tree predictions
-        pred_y = self.predict(data['features'],
-                              output_type=output_type,
-                              verbose=verbose)
-
-        # rms error of the predicted versus actual
-        rmse = sqrt(mean_squared_error(data['labels'], pred_y))
-
-        # r-squared of predicted versus actual
         if regress_limit is not None:
             lm = self.linear_regress(data['labels'],
-                                     pred_y,
+                                     prediction,
                                      xlim=regress_limit)
         else:
             lm = self.linear_regress(data['labels'],
-                                     pred_y)
+                                     prediction)
 
-        # if either one of outfile or pickle file are available
-        # then raise error
-        if (outfile is not None) != (picklefile is not None):
-            raise ValueError("Missing outfile or picklefile")
-
-        # if outfile and pickle file are both available
-        # then write to file and proceed to return
-        elif outfile is not None:
-            # write y, y_hat_bar, var_y to file (<- rows in this order)
-            out_list = ['obs_y,' + ', '.join([str(elem) for elem in data['labels']]),
-                        'pred_y,' + ', '.join([str(elem) for elem in pred_y]),
-                        'rmse,' + str(rmse),
-                        'rsq,' + str(lm['rsq']),
-                        'slope,' + str(lm['slope']),
-                        'intercept,' + str(lm['intercept']),
-                        'rf_file,' + picklefile]
-
-            if all_y is not None:
-                out_list.append('all_y,' + '[' + ', '.join(['[' + ', '.join(str(elem) for
-                                                            elem in arr) + ']' for arr in list(all_y)]) + ']')
-            if var_y is not None:
-                out_list.append('var_y,' + ', '.join([str(elem) for elem in var_y]))
-
-            if sd_y is not None:
-                out_list.append('sd_y,' + ', '.join([str(elem) for elem in sd_y]))
-
-            if mean is not None:
-                out_list.append('mean,' + ', '.join([str(elem) for elem in mean]))
-
-            # write the list to file
-            Handler(filename=outfile).write_list_to_file(out_list)
+        rmse = sqrt(mean_squared_error(data['labels'], prediction))
 
         # if outfile and pickle file are not provided,
         # then only return values
         out_dict = {
-            'pred_y': pred_y,
-            'obs_y': data['labels'],
+            'pred': prediction,
+            'labels': data['labels'],
             'rmse': rmse,
             'rsq': lm['rsq'],
             'slope': lm['slope'],
             'intercept': lm['intercept'],
         }
-
-        if all_y is not None:
-            out_dict['all_y'] = all_y
-        if var_y is not None:
-            out_dict['var_y'] = var_y
-        if sd_y is not None:
-            out_dict['sd_y'] = sd_y
-        if mean is not None:
-            out_dict['mean'] = mean
-
         return out_dict
 
-    def var_importance(self):
-        """
-        Return list of tuples of band names and their importance
-        """
-
-        return [(band, importance) for band, importance in
-                zip(self.data['feature_names'], self.regressor.feature_importances_)]
-
-    def get_training_fit(self,
-                         regress_limit=None,
-                         output_type=None):
-
-        """
-        Find out how well the training samples fit the model
-        :param output_type: Metric to be omputed from the random forest (options: 'mean','median','sd')
-        :param regress_limit: List of upper and lower regression limits for training fit prediction
-        :return: None
-        """
-        defaults = self.get_defaults()
-        output_type = defaults['output_type'] if output_type is None else output_type
-
-        if self.fit:
-            # predict using held out samples and print to file
-            pred = self.sample_predictions(self.data,
-                                           regress_limit=regress_limit,
-                                           output_type=output_type)
-
-            self.training_results['rsq'] = pred['rsq'] * 100.0
-            self.training_results['slope'] = pred['slope']
-            self.training_results['intercept'] = pred['intercept']
-            self.training_results['rmse'] = pred['rmse']
-        else:
-            raise ValueError("Model not initialized with samples")
-
     def get_adjustment_param(self,
-                             clip=None,
                              data_limits=None,
-                             output_type=None,
+                             output_type='mean',
+                             clip=0.025,
                              over_adjust=1.0):
         """
         get the model adjustment parameters based on training fit
@@ -1556,17 +1278,12 @@ class RFRegressor(_Regressor):
         :param over_adjust: Amount of over adjustment needed to adjust slope of the output data
         :return: None
         """
-        defaults = _Regressor.get_defaults()
-        output_type = defaults['output_type'] if output_type is None else output_type
-
-        if clip is None:
-            clip = defaults['llim']
 
         if data_limits is None:
             data_limits = [self.data['labels'].min(), self.data['labels'].max()]
 
         regress_limit = [data_limits[0] + clip * (data_limits[1]-data_limits[0]),
-                         data_limits[1] - clip * (data_limits[1]-data_limits[0])]
+                         data_limits[0] + (1.0-clip) * (data_limits[1]-data_limits[0])]
 
         self.get_training_fit(regress_limit=regress_limit,
                               output_type=output_type)
@@ -1630,16 +1347,15 @@ class HRFRegressor(RFRegressor):
             "\n---\nRegressors: \n---\n{}".format('\n'.join(repr_regressor)) + \
             "\n---\n\n"
 
-    @Timer.timing
     def regress_raster(self,
                        raster_obj,
                        outfile=None,
                        outdir=None,
-                       band_name=None,
-                       output_type=None,
+                       band_name='band_1',
+                       output_type='mean',
                        array_multiplier=1.0,
                        array_additive=0.0,
-                       out_data_type=None,
+                       out_data_type=gdal.GDT_Float32,
                        nodatavalue=None,
                        **kwargs):
 
@@ -1658,11 +1374,6 @@ class HRFRegressor(RFRegressor):
         :returns: Output as raster object
         """
 
-        defaults = self.get_defaults()
-        output_type = defaults['output_type'] if output_type is None else output_type
-        band_name = defaults['band_name'] if band_name is None else band_name
-        out_data_type = defaults['out_data_type'] if out_data_type is None else out_data_type
-
         self.feature_index = list(list(raster_obj.bnames.index(feat) for feat in feat_grp)
                                   for feat_grp in self.features)
 
@@ -1680,7 +1391,7 @@ class HRFRegressor(RFRegressor):
 
     def predict(self,
                 arr,
-                output_type=None,
+                output_type='mean',
                 **kwargs):
         """
         Calculate random forest model prediction, variance, or standard deviation.
@@ -1718,8 +1429,6 @@ class HRFRegressor(RFRegressor):
 
         :return: 1d image array (that will need reshaping if image output)
         """
-        defaults = self.get_defaults()
-        output_type = defaults['output_type'] if output_type is None else output_type
 
         if output_type == 'full':
             raise ValueError('Output type "full" is not supported for this class')
@@ -1732,7 +1441,7 @@ class HRFRegressor(RFRegressor):
                      arr,
                      tile_start=None,
                      tile_end=None,
-                     output_type=None,
+                     output_type='mean',
                      nodatavalue=None,
                      intvl=None,
                      min_variance=None,
@@ -1773,15 +1482,9 @@ class HRFRegressor(RFRegressor):
         :return: numpy 1-D array
         """
 
-        defaults = _Regressor.get_defaults()
-        output_type = defaults['output_type'] if output_type is None else output_type
-
         # leaf variance limit for sd or var output type
         if min_variance is None:
-            if intvl is not None:
-                min_variance = (1 - intvl/100.) * np.min(arr.astype(np.float32))
-            else:
-                min_variance = defaults['variance_limit'] * np.min(arr.astype(np.float32))
+            min_variance = 0.025 * (self.data['labels'].max() - self.data['labels'].min())
 
         # define input array shape param
         if tile_end is None:
