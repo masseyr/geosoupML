@@ -397,7 +397,7 @@ class Samples:
         """
 
         out_arr = np.hstack((self.x, self.y[:, np.newaxis]))
-        out_names = self.x_name + list(self.y_name)
+        out_names = self.x_name + [self.y_name]
 
         Handler(out_file).write_numpy_array_to_file(np_array=out_arr,
                                                     colnames=out_names)
