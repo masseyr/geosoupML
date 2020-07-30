@@ -227,6 +227,32 @@ class Samples:
             'feature_names': Opt.__copy__(out_x_name),
         }
 
+    def select_features(self,
+                        name_list=None):
+
+        """
+        Method to return a Samples instance using a selection of feature names
+        :param name_list: List of feature names to make a new Samples() instance from
+        :returns: Samples instance
+        """
+        indx_list = []
+        for name in name_list:
+            indx_list.append(self.x_name.index(name))
+
+        samp = Samples(label_colname=self.y_name,
+                       x=self.x[:, np.array(indx_list)],
+                       y=self.y,
+                       x_name=name_list,
+                       y_name=self.y_name,
+                       weights=self.weights,
+                       weights_colname=self.weights_colname,
+                       use_band_dict=self.use_band_dict,
+                       max_allow_x=self.max_allow_x,
+                       max_allow_y=self.max_allow_y)
+
+        samp.csv_file = self.csv_file
+        return samp
+
     def correlation_matrix(self,
                            verbose=False):
         """
@@ -255,10 +281,8 @@ class Samples:
         # calculate correlation matrix
         for i in range(0, nvar):
             for j in range(0, nvar):
-                corr[i, j] = np.abs(pearsonr(data_mat[:, i],
-                                             data_mat[:, j])[0])
-                pval[i, j] = np.abs(pearsonr(data_mat[:, i],
-                                             data_mat[:, j])[1])
+                corr[i, j] = pearsonr(data_mat[:, i], data_mat[:, j])[0]
+                pval[i, j] = pearsonr(data_mat[:, i], data_mat[:, j])[1]
                 if verbose:
                     str1 = '{row} <---> {col} = '.format(row=var_names[i], col=var_names[j])
                     str2 = '{:{w}.{p}f}'.format(corr[i, j], w=3, p=2)
