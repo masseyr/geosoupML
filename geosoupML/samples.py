@@ -1,6 +1,6 @@
 import warnings
 from scipy.stats.stats import pearsonr
-from geosoup.common import Handler, Opt, Sublist, Timer, np
+from geosoup.common import Handler, Opt, Sublist, np
 
 
 __all__ = ['Samples']
@@ -89,7 +89,7 @@ class Samples:
                 raise ValueError("Label name mismatch.\nAvailable names: " + ', '.join(temp['name']))
 
             # read from data dictionary
-            self.x_name = Sublist(elem.strip() for elem in temp['name'][:loc] + temp['name'][(loc + 1):])
+            self.x_name = list(elem.strip() for elem in temp['name'][:loc] + temp['name'][(loc + 1):])
             self.x = np.array(list(feat[:loc] + feat[(loc + 1):] for feat in temp['feature']))
             self.y = np.array(list(feat[loc] for feat in temp['feature']))
             self.y_name = temp['name'][loc].strip()
@@ -103,7 +103,7 @@ class Samples:
             temp = Handler(filename=csv_file).read_from_csv()
 
             # read from data dictionary
-            self.x_name = Sublist(temp['name'])
+            self.x_name = list(temp['name'])
             self.x = np.array(list(feat for feat in temp['feature']))
 
         else:
@@ -215,7 +215,7 @@ class Samples:
             column_list = []
             column_list += self.columns.tolist()
             out_x = self.x[:, self.columns]
-            out_x_name = Sublist(self.x_name[i] for i in column_list)
+            out_x_name = list(self.x_name[i] for i in column_list)
         else:
             out_x = self.x
             out_x_name = self.x_name
@@ -228,11 +228,11 @@ class Samples:
         }
 
     def correlation_matrix(self,
-                           display_progress=True):
+                           verbose=False):
         """
         Method to return a dictionary with correlation data
         rows = columns = variables (or dimensions)
-        :param display_progress: Should the elements of correlation matrix
+        :param verbose: Should the elements of correlation matrix
         be displayed while being calculated? (default: True)
 
         :return: Dictionary
@@ -249,19 +249,22 @@ class Samples:
             var_names.append(name.upper())
 
         # initialize correlation matrix
-        corr = np.zeros([nvar, nvar], dtype=float)
+        corr = np.zeros([nvar, nvar], dtype=np.float32)
+        pval = np.zeros([nvar, nvar], dtype=np.float32)
 
         # calculate correlation matrix
         for i in range(0, nvar):
             for j in range(0, nvar):
-                corr[i, j] = np.abs(pearsonr(Sublist.column(data_mat, i),
-                                             Sublist.column(data_mat, j))[0])
-                if display_progress:
+                corr[i, j] = np.abs(pearsonr(data_mat[:, i],
+                                             data_mat[:, j])[0])
+                pval[i, j] = np.abs(pearsonr(data_mat[:, i],
+                                             data_mat[:, j])[1])
+                if verbose:
                     str1 = '{row} <---> {col} = '.format(row=var_names[i], col=var_names[j])
                     str2 = '{:{w}.{p}f}'.format(corr[i, j], w=3, p=2)
                     print(str1 + str2)
 
-        return {'data': corr, 'names': var_names}
+        return {'corr': corr, 'pval': pval, 'names': var_names}
 
     def merge_data(self,
                    samp):
@@ -498,11 +501,13 @@ class Samples:
         self.merge_data(samp)
 
     def make_folds(self,
-                   n_folds=5):
+                   n_folds=5,
+                   replace=False):
 
         """
         Make n folds in sample sets
-        :param n_folds:
+        :param n_folds: Number of folds
+        :param replace: If the sample selection is with or without replacement
         :return: list of tuples [(training samp, validation samp)...]
         """
 
@@ -514,18 +519,20 @@ class Samples:
         fold_samples = list()
 
         for fold_samp in nsamp_list:
-            if index_list.shape[0] < (2 * fold_samp):
+            if index_list.shape[0] != fold_samp:
                 val_index = np.random.choice(index_list,
                                              size=fold_samp,
-                                             replace=False)
+                                             replace=replace)
             else:
-                val_index = np.random.choice(index_list,
-                                             size=fold_samp,
-                                             replace=False)
+                val_index = index_list
 
-            trn_index = self.index[~np.in1d(self.index, val_index)]
-            index_list = index_list[~np.in1d(index_list, val_index)]
+            trn_index = self.index[~np.in1d(self.index,
+                                            val_index)]
 
-            fold_samples.append((self.selection(trn_index), self.selection(val_index)))
+            index_list = index_list[~np.in1d(index_list,
+                                             val_index)]
+
+            fold_samples.append((self.selection(trn_index),
+                                 self.selection(val_index)))
 
         return fold_samples
