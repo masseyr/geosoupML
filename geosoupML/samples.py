@@ -70,6 +70,11 @@ class Samples:
         self.ymin = None
         self.ymax = None
 
+        self.y_hist = None
+        self.y_bins = None
+        self.x_hist = None
+        self.x_bins = None
+
         self.max_allow_x = max_allow_x
         self.max_allow_y = max_allow_y
 
@@ -560,3 +565,16 @@ class Samples:
                                  self.selection(val_index)))
 
         return fold_samples
+
+    def calc_histograms(self,
+                        nbins_y=10,
+                        nbins_x=10):
+        """
+        Method to compute multidimensional histogram for independent features
+        and 1D histogram for the response
+        :param nbins_x: Number of bins to compute multi dimensional histogram for input features
+        :param nbins_y: Number of bins to compute 1D histogram for the response variable
+        """
+
+        self.y_hist, self.y_bins = np.histogram(self.y, bins=nbins_y)
+        self.x_hist, self.x_bins = np.histogramdd(self.x, bins=nbins_x)
