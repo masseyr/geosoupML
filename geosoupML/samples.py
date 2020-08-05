@@ -71,9 +71,9 @@ class Samples:
         self.ymax = None
 
         self.y_hist = None
-        self.y_bins = None
+        self.y_bin_edges = None
         self.x_hist = None
-        self.x_bins = None
+        self.x_bin_edges = None
 
         self.max_allow_x = max_allow_x
         self.max_allow_y = max_allow_y
@@ -576,5 +576,11 @@ class Samples:
         :param nbins_y: Number of bins to compute 1D histogram for the response variable
         """
 
-        self.y_hist, self.y_bins = np.histogram(self.y, bins=nbins_y)
-        self.x_hist, self.x_bins = np.histogramdd(self.x, bins=nbins_x)
+        self.y_hist, self.y_bin_edges = np.histogram(self.y, bins=nbins_y)
+
+        self.x_hist = np.zeros((nbins_x, self.x.shape[1]), dtype=np.int32)
+        self.x_bin_edges = np.zeros((nbins_x + 1, self.x.shape[1]), dtype=np.float32)
+
+        for dim in range(self.x.shape[1]):
+            self.x_hist[:, dim], self.x_bin_edges[:, dim] = np.histogram(self.x[:, dim], bins=nbins_x)
+
