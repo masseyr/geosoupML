@@ -1251,27 +1251,19 @@ class RFRegressor(_Regressor):
             lm = self.linear_regress(data['labels'],
                                      prediction)
 
-        if not np.all(np.isfinite(data['labels'])) or np.all(np.isfinite(prediction)):
-            if not np.all(np.isfinite(data['labels'])):
-                warnings.warn('NAN or INF in labels')
-            else:
-                warnings.warn('NAN or INF in predictions')
-            return
+        rmse = sqrt(mean_squared_error(data['labels'], prediction))
 
-        else:
-            rmse = sqrt(mean_squared_error(data['labels'], prediction))
-
-            # if outfile and pickle file are not provided,
-            # then only return values
-            out_dict = {
-                'pred': prediction,
-                'labels': data['labels'],
-                'rmse': rmse,
-                'rsq': lm['rsq'],
-                'slope': lm['slope'],
-                'intercept': lm['intercept'],
-            }
-            return out_dict
+        # if outfile and pickle file are not provided,
+        # then only return values
+        out_dict = {
+            'pred': prediction,
+            'labels': data['labels'],
+            'rmse': rmse,
+            'rsq': lm['rsq'],
+            'slope': lm['slope'],
+            'intercept': lm['intercept'],
+        }
+        return out_dict
 
     def get_adjustment_param(self,
                              data_limits=None,
