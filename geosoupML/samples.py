@@ -270,32 +270,37 @@ class Samples:
 
         :return: Dictionary
         """
-        # get data from samples
-        data_mat = self.x
-        nsamp, nvar = data_mat.shape
-        print(nsamp, nvar)
+        if np.issubdtype(self.x.dtype, np.number):
 
-        # get names of variables
-        var_names = list()
-        for i, name in enumerate(self.x_name):
-            print(str(i)+' '+name)
-            var_names.append(name.upper())
+            # get data from samples
+            data_mat = self.x
+            nsamp, nvar = data_mat.shape
+            print(nsamp, nvar)
 
-        # initialize correlation matrix
-        corr = np.zeros([nvar, nvar], dtype=np.float32)
-        pval = np.zeros([nvar, nvar], dtype=np.float32)
+            # get names of variables
+            var_names = list()
+            for i, name in enumerate(self.x_name):
+                print(str(i)+' '+name)
+                var_names.append(name.upper())
 
-        # calculate correlation matrix
-        for i in range(0, nvar):
-            for j in range(0, nvar):
-                corr[i, j] = pearsonr(data_mat[:, i], data_mat[:, j])[0]
-                pval[i, j] = pearsonr(data_mat[:, i], data_mat[:, j])[1]
-                if verbose:
-                    str1 = '{row} <---> {col} = '.format(row=var_names[i], col=var_names[j])
-                    str2 = '{:{w}.{p}f}'.format(corr[i, j], w=3, p=2)
-                    print(str1 + str2)
+            # initialize correlation matrix
+            corr = np.zeros([nvar, nvar], dtype=np.float32)
+            pval = np.zeros([nvar, nvar], dtype=np.float32)
 
-        return {'corr': corr, 'pval': pval, 'names': var_names}
+            # calculate correlation matrix
+            for i in range(0, nvar):
+                for j in range(0, nvar):
+                    corr[i, j] = pearsonr(data_mat[:, i], data_mat[:, j])[0]
+                    pval[i, j] = pearsonr(data_mat[:, i], data_mat[:, j])[1]
+                    if verbose:
+                        str1 = '{row} <---> {col} = '.format(row=var_names[i], col=var_names[j])
+                        str2 = '{:{w}.{p}f}'.format(corr[i, j], w=3, p=2)
+                        print(str1 + str2)
+
+            return {'corr': corr, 'pval': pval, 'names': var_names}
+
+        else:
+            raise TypeError("Flexible data type for X - Cannot compute histograms")
 
     def merge_data(self,
                    samp):
@@ -587,8 +592,11 @@ class Samples:
         :param nbins_x: Number of bins to compute multi dimensional histogram for input features
         :param nbins_y: Number of bins to compute 1D histogram for the response variable
         """
+        if np.issubdtype(self.y.dtype, np.number):
+            self.y_hist, self.y_bin_edges = np.histogram(self.y, bins=nbins_y)
+        else:
+            warnings.warn('Flexible data type for Y - Cannot compute histograms')
 
-        self.y_hist, self.y_bin_edges = np.histogram(self.y, bins=nbins_y)
         self.x_hist = np.zeros((nbins_x, self.x.shape[1]), dtype=np.int32)
 
         if np.issubdtype(self.x.dtype, np.number):
@@ -597,5 +605,5 @@ class Samples:
             for dim in range(self.x.shape[1]):
                 self.x_hist[:, dim], self.x_bin_edges[:, dim] = np.histogram(self.x[:, dim], bins=nbins_x)
         else:
-            warnings.warn()
+            warnings.warn('Flexible data type for X - Cannot compute histograms')
 
