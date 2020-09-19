@@ -174,8 +174,9 @@ class Samples:
 
             self.nfeat = self.x.shape[1]
 
-            self.xmin = self.x.min(0, initial=max_allow_x)
-            self.xmax = self.x.max(0, initial=max_allow_y)
+            if np.issubdtype(self.x.dtype, np.number):
+                self.xmin = self.x.min(0, initial=max_allow_x)
+                self.xmax = self.x.max(0, initial=max_allow_y)
 
             self.index = np.arange(0, self.x.shape[0])
 
@@ -184,8 +185,9 @@ class Samples:
             self.nvar = 0
 
         if self.y is not None:
-            self.ymin = self.y.min(initial=-max_allow_y)
-            self.ymax = self.y.max(initial=max_allow_y)
+            if np.issubdtype(self.y.dtype, np.number):
+                self.ymin = self.y.min(initial=-max_allow_y)
+                self.ymax = self.y.max(initial=max_allow_y)
 
         if self.y is not None:
             self.head = '\n'.join(list(str(elem) for elem in
@@ -306,10 +308,12 @@ class Samples:
         self.y = np.hstack((self.y, samp.y))
         self.nsamp = self.x.shape[0]
         self.index = np.arange(0, self.nsamp)
-        self.xmin = self.x.min(0, initial=-self.max_allow_x)
-        self.xmax = self.x.max(0, initial=self.max_allow_x)
-        self.ymin = self.y.min(initial=-self.max_allow_y)
-        self.ymax = self.y.max(initial=self.max_allow_y)
+        if np.issubdtype(self.x.dtype, np.number):
+            self.xmin = self.x.min(0, initial=-self.max_allow_x)
+            self.xmax = self.x.max(0, initial=self.max_allow_x)
+        if np.issubdtype(self.y.dtype, np.number):
+            self.ymin = self.y.min(initial=-self.max_allow_y)
+            self.ymax = self.y.max(initial=self.max_allow_y)
 
     def delete_column(self,
                       column_id=None,
@@ -435,10 +439,13 @@ class Samples:
         trn_samp.index = np.arange(0, trn_samp.nsamp)
         trn_samp.nfeat = trn_samp.x.shape[1]
 
-        trn_samp.xmin = trn_samp.x.min(0, initial=-self.max_allow_x)
-        trn_samp.xmax = trn_samp.x.max(0, initial=self.max_allow_x)
-        trn_samp.ymin = trn_samp.y.min(initial=-self.max_allow_y)
-        trn_samp.ymax = trn_samp.y.max(initial=self.max_allow_y)
+        if np.issubdtype(self.x.dtype, np.number):
+            trn_samp.xmin = trn_samp.x.min(0, initial=-self.max_allow_x)
+            trn_samp.xmax = trn_samp.x.max(0, initial=self.max_allow_x)
+
+        if np.issubdtype(self.y.dtype, np.number):
+            trn_samp.ymin = trn_samp.y.min(initial=-self.max_allow_y)
+            trn_samp.ymax = trn_samp.y.max(initial=self.max_allow_y)
 
         # validation sample object
         val_samp = Samples()
@@ -450,10 +457,13 @@ class Samples:
         val_samp.index = np.arange(0, val_samp.nsamp)
         val_samp.nfeat = val_samp.x.shape[1]
 
-        val_samp.xmin = val_samp.x.min(0, initial=-self.max_allow_x)
-        val_samp.xmax = val_samp.x.max(0, initial=self.max_allow_x)
-        val_samp.ymin = val_samp.y.min(initial=-self.max_allow_y)
-        val_samp.ymax = val_samp.y.max(initial=self.max_allow_y)
+        if np.issubdtype(self.x.dtype, np.number):
+            val_samp.xmin = val_samp.x.min(0, initial=-self.max_allow_x)
+            val_samp.xmax = val_samp.x.max(0, initial=self.max_allow_x)
+
+        if np.issubdtype(self.y.dtype, np.number):
+            val_samp.ymin = val_samp.y.min(initial=-self.max_allow_y)
+            val_samp.ymax = val_samp.y.max(initial=self.max_allow_y)
 
         return trn_samp, val_samp
 
@@ -485,11 +495,12 @@ class Samples:
         ran_samp.nfeat = self.x.shape[1]
         ran_samp.index = np.arange(0, ran_samp.nsamp)
 
-        ran_samp.xmin = self.x.min(0, initial=-self.max_allow_x)
-        ran_samp.xmax = self.x.max(0, initial=self.max_allow_x)
-
-        ran_samp.ymin = self.y.min(initial=-self.max_allow_y)
-        ran_samp.ymax = self.y.max(initial=self.max_allow_y)
+        if np.issubdtype(ran_samp.x.dtype, np.number):
+            ran_samp.xmin = ran_samp.x.min(0, initial=-self.max_allow_x)
+            ran_samp.xmax = ran_samp.x.max(0, initial=self.max_allow_x)
+        if np.issubdtype(ran_samp.y.dtype, np.number):
+            ran_samp.ymin = ran_samp.y.min(initial=-self.max_allow_y)
+            ran_samp.ymax = ran_samp.y.max(initial=self.max_allow_y)
 
         return ran_samp
 
@@ -512,11 +523,12 @@ class Samples:
         samp.nfeat = self.x.shape[1]
         samp.index = np.arange(0, samp.nsamp)
 
-        samp.xmin = self.x.min(0, initial=-self.max_allow_x)
-        samp.xmax = self.x.max(0, initial=self.max_allow_x)
-
-        samp.ymin = self.y.min(initial=-self.max_allow_y)
-        samp.ymax = self.y.max(initial=self.max_allow_y)
+        if np.issubdtype(samp.x.dtype, np.number):
+            samp.xmin = samp.x.min(0, initial=-self.max_allow_x)
+            samp.xmax = samp.x.max(0, initial=self.max_allow_x)
+        if np.issubdtype(samp.x.dtype, np.number):
+            samp.ymin = samp.y.min(initial=-self.max_allow_y)
+            samp.ymax = samp.y.max(initial=self.max_allow_y)
 
         return samp
 
@@ -577,10 +589,13 @@ class Samples:
         """
 
         self.y_hist, self.y_bin_edges = np.histogram(self.y, bins=nbins_y)
-
         self.x_hist = np.zeros((nbins_x, self.x.shape[1]), dtype=np.int32)
-        self.x_bin_edges = np.zeros((nbins_x + 1, self.x.shape[1]), dtype=np.float32)
 
-        for dim in range(self.x.shape[1]):
-            self.x_hist[:, dim], self.x_bin_edges[:, dim] = np.histogram(self.x[:, dim], bins=nbins_x)
+        if np.issubdtype(self.x.dtype, np.number):
+            self.x_bin_edges = np.zeros((nbins_x + 1, self.x.shape[1]), dtype=np.float32)
+
+            for dim in range(self.x.shape[1]):
+                self.x_hist[:, dim], self.x_bin_edges[:, dim] = np.histogram(self.x[:, dim], bins=nbins_x)
+        else:
+            warnings.warn()
 
