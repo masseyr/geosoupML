@@ -28,6 +28,8 @@ class Samples:
                  use_band_dict=None,
                  max_allow_x=1e13,
                  max_allow_y=1e13,
+                 line_limit=None,
+                 remove_null=True,
                  **kwargs):
 
         """
@@ -80,36 +82,70 @@ class Samples:
 
         # either of label name or csv file is provided without the other
         if (csv_file is None) and (label_colname is None):
-            pass  # warnings.warn("Samples class initiated without data file or label")
+            warnings.warn("Samples class initiated without data file or label")
 
         # label name or csv file are provided
         elif (label_colname is not None) and (csv_file is not None):
 
-            temp = Handler(filename=csv_file).read_from_csv()
+            temp = Handler(filename=csv_file).read_from_csv(return_dicts=True,
+                                                            line_limit=line_limit)
+            header = list(temp[0])
 
             # label name doesn't match
-            if any(label_colname in s for s in temp['name']):
-                loc = temp['name'].index(label_colname)
+            if label_colname in header:
+                loc = header.index(label_colname)
             else:
-                raise ValueError("Label name mismatch.\nAvailable names: " + ', '.join(temp['name']))
+                raise ValueError("Label name mismatch.\nAvailable names: " + ', '.join(header))
+
+            feat_names = header.copy()
+            _ = feat_names.pop(loc)
 
             # read from data dictionary
-            self.x_name = list(elem.strip() for elem in temp['name'][:loc] + temp['name'][(loc + 1):])
-            self.x = np.array(list(feat[:loc] + feat[(loc + 1):] for feat in temp['feature']))
-            self.y = np.array(list(feat[loc] for feat in temp['feature']))
-            self.y_name = temp['name'][loc].strip()
+            self.x_name = feat_names
+
+            clean_list = []
+            if remove_null:
+                for elem_dict in temp:
+                    val_chk = list((elem in (None, '', ' ', 'null', 'NULL', '<null>', '<NULL>')) or
+                                   (elem in (int, float) and np.isnan(elem))
+                                   for elem in elem_dict.values())
+                    if any(val_chk):
+                        continue
+                    else:
+                        clean_list.append(elem_dict)
+            else:
+                clean_list = temp
+
+            self.x = np.array(list(list(samp_dict[feat_name] for feat_name in feat_names)
+                                   for samp_dict in clean_list))
+            self.y = np.array(list(samp_dict[label_colname] for samp_dict in clean_list))
+            self.y_name = label_colname
 
             # if band name dictionary is provided
             if use_band_dict is not None:
                 self.y_name = [use_band_dict[b] for b in self.y_name]
 
         elif (label_colname is None) and (csv_file is not None):
+            temp = Handler(filename=csv_file).read_from_csv(return_dicts=True,
+                                                            line_limit=line_limit)
 
-            temp = Handler(filename=csv_file).read_from_csv()
+            clean_list = []
+            if remove_null:
+                for elem_dict in temp:
+                    val_chk = list((elem in (None, '', ' ', 'null', 'NULL', '<null>', '<NULL>')) or
+                                   (elem in (int, float) and np.isnan(elem))
+                                   for elem in elem_dict.values())
+                    if any(val_chk):
+                        continue
+                    else:
+                        clean_list.append(elem_dict)
+            else:
+                clean_list = temp
 
             # read from data dictionary
-            self.x_name = list(temp['name'])
-            self.x = np.array(list(feat for feat in temp['feature']))
+            self.x_name = list(clean_list[0].keys())
+            self.x = np.array(list(list(samp_dict[feat_name] for feat_name in self.x_name)
+                                   for samp_dict in clean_list))
 
         else:
             ValueError("No data found for label.")
@@ -126,13 +162,11 @@ class Samples:
             if weights_colname is not None:
                 if csv_file is not None:
 
-                    temp = Handler(filename=csv_file).read_from_csv()
-
                     # label name doesn't match
-                    if any(weights_colname in n for n in temp['name']):
-                        loc = temp['name'].index(weights_colname)
+                    if any(weights_colname in n for n in self.x_name):
+                        loc = self.x_name.index(weights_colname)
                     else:
-                        raise ValueError("Weight column name mismatch.\nAvailable names: " + ', '.join(temp['name']))
+                        raise ValueError("Weight column name mismatch")
 
                     self.weights = self.x[:, loc]
                     self.x = np.delete(self.x, loc, 1)
@@ -205,12 +239,46 @@ class Samples:
         if self.csv_file is not None:
             return "<Samples object from {cf} with {v} variables, {n} samples>".format(cf=Handler(
                                                                                        self.csv_file).basename,
-                                                                                       n=len(self.x),
-                                                                                       v=len(self.x_name))
+                                                                                       n=self.x.shape[0],
+                                                                                       v=self.x.shape[1])
         elif self.csv_file is None and self.x is not None:
-            return "<Samples object with {n} samples>".format(n=len(self.x))
+            return "<Samples object with {v} variables, {n} samples>".format(n=self.x.shape[0],
+                                                                             v=self.x.shape[1])
         else:
-            return "<Samples object: __empty__>"
+            return "<Samples object: EMPTY>"
+
+    def subsample(self,
+                  index_locations):
+        """
+        Method to get index locations as a sample object
+        :param index_locations: list, tuple, numpy array or integer of index locations
+        :returns: Sample object
+        """
+        if isinstance(index_locations, list) or \
+                isinstance(index_locations, tuple) or \
+                isinstance(index_locations, np.ndarray) or \
+                isinstance(index_locations, int):
+
+            outsamp = Samples()
+            outsamp.x_name = self.x_name
+            outsamp.y_name = self.y_name
+
+            if isinstance(index_locations, int):
+                loc = np.array([index_locations])
+            else:
+                loc = np.array(index_locations)
+
+            outsamp.x = self.x[np.array(loc), :]
+            outsamp.y = self.y[np.array(loc)]
+
+            outsamp.nsamp = outsamp.x.shape[0]
+            outsamp.index = np.arange(0, outsamp.nsamp)
+            outsamp.nfeat = outsamp.x.shape[1]
+
+            return outsamp
+
+        else:
+            raise TypeError("subsample() method works for list, tuple, numpy array or integer data types only")
 
     def format_data(self):
         """
@@ -606,4 +674,3 @@ class Samples:
                 self.x_hist[:, dim], self.x_bin_edges[:, dim] = np.histogram(self.x[:, dim], bins=nbins_x)
         else:
             warnings.warn('Flexible data type for X - Cannot compute histograms')
-
