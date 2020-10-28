@@ -1,13 +1,14 @@
-import pickle
-import warnings
-from scipy import stats
-from math import sqrt
-from sklearn import linear_model
+from geosoup.raster import Raster, np, gdal_array, gdal
+from geosoup.common import Handler, Opt
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import GridSearchCV
 from sklearn.metrics import mean_squared_error
-from geosoup.common import Handler, Opt
-from geosoup.raster import Raster, np, gdal_array, gdal
+from sklearn import linear_model
+from abc import ABCMeta, abstractmethod
+from scipy import stats
+from math import sqrt
+import warnings
+import pickle
 
 
 __all__ = ['HRFRegressor',
@@ -17,7 +18,7 @@ __all__ = ['HRFRegressor',
 sep = Handler().sep
 
 
-class _Regressor(object):
+class _Regressor(object, metaclass=ABCMeta):
     """
     Regressor base class
     """
@@ -56,21 +57,21 @@ class _Regressor(object):
                  use_weights=False):
         """
         Train the regressor
-        :param data: dictionary with values (generated using Samples.format_data())
+        :param data: Samples object
         :param use_weights: If the sample weights provided should be used? (default: False)
-        :return: Nonetype
+        :return: None
         """
         self.data = data
 
         if self.regressor is not None:
 
-            if 'weights' not in data or not use_weights:
-                self.regressor.fit(data['features'], data['labels'])
+            if (data.weights is None) or (not use_weights):
+                self.regressor.fit(data.x, data.y)
             else:
-                self.regressor.fit(data['features'], data['labels'], data['weights'])
+                self.regressor.fit(data.x, data.y, data.weights)
 
-        self.features = data['feature_names']
-        self.label = data['label_name']
+        self.features = data.x_name
+        self.label = data.y_name
         self.fit = True
 
     def pickle_it(self,
@@ -100,7 +101,7 @@ class _Regressor(object):
         """
         Find out how well the training samples fit the model
         :param data: Samples() instance
-        :param output_type: Metric to be omputed from the random forest (options: 'mean','median','sd')
+        :param output_type: Metric to be computed from the random forest (options: 'mean','median','sd')
         :param regress_limit: List of upper and lower regression limits for training fit prediction
         :return: None
         """
@@ -124,7 +125,14 @@ class _Regressor(object):
             self.training_results['intercept'] = pred['intercept']
             self.training_results['rmse'] = pred['rmse']
         else:
-            raise ValueError("Model not initialized with samples")
+            raise ValueError("Model not initialized with samples. Use fit_data() method")
+
+    @abstractmethod
+    def predict(self, *args, **kwargs):
+        """
+        Placeholder of subclass predict() methods
+        """
+        return
 
     @staticmethod
     def param_grid(param_dict):
@@ -171,7 +179,7 @@ class _Regressor(object):
         results = []
 
         for trn_data, test_data in folds:
-            regressor.fit_data(trn_data.format_data(),
+            regressor.fit_data(trn_data,
                                use_weights=use_weights)
 
             get_adjustment_param = getattr(regressor, 'get_adjustment_param', None)
@@ -180,7 +188,7 @@ class _Regressor(object):
                 get_adjustment_param(data_limits=regress_limit,
                                      output_type=output_type)
 
-            pred = regressor.sample_predictions(test_data.format_data(),
+            pred = regressor.sample_predictions(test_data,
                                                 regress_limit=regress_limit,
                                                 output_type=output_type)
             results.append(pred)
@@ -214,7 +222,7 @@ class _Regressor(object):
         """
         Method to search optimal parameters for the regressor. If 'select' is True, then this method
         will return a set of parameters with the best model score.
-        :param data: dictionary with values (generated using Samples.format_data())
+        :param data: Samples object
         :param param_dict: Dictionary of parameter grid to search for best score
         :param cv_folds: number of folds to divide the samples in
         :param n_jobs: number of parallel processes to run the grid search
@@ -227,21 +235,21 @@ class _Regressor(object):
             raise RuntimeError('Regressor not defined!')
 
         self.data = data
-        self.features = data['feature_names']
-        self.label = data['label_name']
+        self.features = data.x_name
+        self.label = data.y_name
 
         model = GridSearchCV(self.regressor,
                              param_dict,
                              cv=cv_folds,
                              n_jobs=n_jobs)
 
-        if 'weights' not in data:
-            model.fit(data['features'],
-                      data['labels'])
+        if data.weights is None:
+            model.fit(data.x,
+                      data.y)
         else:
-            model.fit(data['features'],
-                      data['labels'],
-                      sample_weight=data['weights'])
+            model.fit(data.x,
+                      data.y,
+                      sample_weight=data.weights)
 
         results = model.cv_results_
 
@@ -315,8 +323,7 @@ class _Regressor(object):
                 'band_additives': np.array([defaults['array_additive'] for _ in raster.bnames]),
                 'tile_size': min([nrows, ncols]) ** 2 if (min([nrows, ncols]) ** 2) <= defaults['tile_size']
                 else defaults['tile_size'],
-                'out_nodatavalue': kwargs['nodatavalue'] if defaults['out_nodatavalue']
-                is None else defaults['out_nodatavalue'],
+                'out_nodatavalue': kwargs['nodatavalue'] if 'nodatavalue' in kwargs else defaults['out_nodatavalue'],
                 'check_bands': check_bands,
             }
 
@@ -365,7 +372,7 @@ class _Regressor(object):
                        outfile=None,
                        outdir=None,
                        output_type='mean',
-                       band_name='band_1',
+                       band_name='prediction',
                        **kwargs):
         """
         Tree variance from the RF regressor
@@ -400,11 +407,16 @@ class _Regressor(object):
         if not raster_obj.init:
             raster_obj.initialize(nan_replacement=nodatavalue)
 
-        kwargs.update({'out_data_type':
-                       gdal_array.NumericTypeCodeToGDALTypeCode(regressor.data['labels'].dtype)})
+        if band_name is None:
+            band_name = regressor.label
 
-        defaults = _Regressor.get_defaults(raster=raster_obj,
-                                           **kwargs)
+        kwargs.update({'out_data_type':
+                       gdal_array.NumericTypeCodeToGDALTypeCode(regressor.data.y.dtype)})
+
+        defaults = regressor.get_defaults(raster=raster_obj,
+                                          output_type=output_type,
+                                          band_name=band_name,
+                                          **kwargs)
 
         verbose = defaults['verbose'] if 'verbose' in defaults else False
         defaults['verbose'] = False
@@ -579,7 +591,7 @@ class MRegressor(_Regressor):
                  **kwargs):
         """
         Instantiate MRegressor class
-        :param data:  Data as Samples() instance
+        :param data:  Samples object
         :param regressor: Linear regressor
         :param fit_intercept: Whether to calculate the intercept for this model (default: True)
         :param n_jobs: The number of jobs to use for the computation
@@ -729,28 +741,28 @@ class MRegressor(_Regressor):
                            **kwargs):
         """
         Get predictions from the multiple regressor
-        :param data: Dictionary object from Samples.format_data
+        :param data: Samples object
         """
         if 'verbose' in kwargs:
             verbose = kwargs['verbose']
         else:
             verbose = False
 
-        self.feature_index = list(data['feature_names'].index(feat) for feat in self.features)
+        self.feature_index = list(data.x_name.index(feat) for feat in self.features)
 
         # calculate variance of tree predictions
-        y = self.predict(data['features'],
+        y = self.predict(data.x,
                          verbose=verbose)
 
         # rms error of the predicted versus actual
-        rmse = sqrt(mean_squared_error(data['labels'], y))
+        rmse = sqrt(mean_squared_error(data.y, y))
 
         # r-squared of predicted versus actual
-        lm = self.linear_regress(data['labels'], y)
+        lm = self.linear_regress(data.y, y)
 
         return {
             'pred': y,
-            'labels': data['labels'],
+            'labels': data.y,
             'rmse': rmse,
             'rsq': lm['rsq'],
             'slope': lm['slope'],
@@ -770,7 +782,7 @@ class MRegressor(_Regressor):
         :return: None
         """
         if data_limits is None:
-            data_limits = [self.data['labels'].min(), self.data['labels'].max()]
+            data_limits = [self.data.y.min(), self.data.y.max()]
 
         regress_limit = [data_limits[0] + clip * (data_limits[1]-data_limits[0]),
                          data_limits[1] - clip * (data_limits[1]-data_limits[0])]
@@ -860,7 +872,8 @@ class RFRegressor(_Regressor):
                                                                     ', '.join(self.features)))
 
             if attr_truth[2]:
-                print_str_list.append("Output: {}\n".format(self.regressor.n_outputs_))
+                print_str_list.append("Output: {} : {} \n".format(self.regressor.n_outputs_,
+                                                                  self.label))
 
             if attr_truth[3]:
                 print_str_list.append("OOB Score: {:{w}.{p}f} %".format(self.regressor.oob_score_ * 100.0,
@@ -898,7 +911,7 @@ class RFRegressor(_Regressor):
         """
 
         if min_variance is None:
-            min_variance = 0.025 * (self.data['labels'].max() - self.data['labels'].min())
+            min_variance = 0.0  # 0.025 * (self.data.y.max() - self.data.y.min())
 
         # List of index of bands to be used for regression
         if 'feature_index' in kwargs:
@@ -943,20 +956,27 @@ class RFRegressor(_Regressor):
                 return tile_arr
 
         elif output_type in ('sd', 'var'):
-
+            # Calculate variance of output across all the leaf nodes:
+            # Each leaf node may have multiple samples in it.
+            # We are trying to find standard deviation
+            # across all leaf node samples in all the trees
+            # using tree impurity statistic as we cannot access all the samples
+            # once the tree is constructed.
+            # Population variance is sum of between group variance and within group variance
+            # read http://arxiv.org/pdf/1211.0906v2.pdf
             for jj, tree_ in enumerate(self.regressor.estimators_):
                 tile_arr[jj, :] = tree_.predict(feat_arr)
 
-                var_tree = tree_.tree_.impurity[tree_.apply(feat_arr)]
+                var_tree = tree_.tree_.impurity[tree_.apply(feat_arr)]  # tree/group variance
 
                 var_tree[var_tree < min_variance] = min_variance
-                mean_tree = tree_.predict(feat_arr)
+                mean_tree = tree_.predict(feat_arr)  # tree mean
                 out_tile += var_tree + mean_tree ** 2
 
-            predictions = np.mean(tile_arr, axis=0)
+            predictions = np.mean(tile_arr, axis=0)  # population means
 
             out_tile /= len(self.regressor.estimators_)
-            out_tile -= predictions ** 2.0
+            out_tile = out_tile - predictions ** 2.0
             out_tile[out_tile < 0.0] = 0.0
 
             if output_type == 'sd':
@@ -1024,7 +1044,7 @@ class RFRegressor(_Regressor):
         if uncert_dict is None or len(uncert_dict) == 0:
             raise RuntimeError("No uncertainty band dictionary provided")
 
-        if type(regressor) != _Regressor:
+        if type(regressor) != RFRegressor:
             raise RuntimeError("Regressor must be supplied to calculate uncertainty ranges" +
                                "Regressor must be of _Regressor class")
 
@@ -1133,7 +1153,7 @@ class RFRegressor(_Regressor):
 
     def predict(self,
                 arr,
-                output_type=None,
+                output_type='mean',
                 **kwargs):
         """
         Calculate random forest model prediction, variance, or standard deviation.
@@ -1201,7 +1221,7 @@ class RFRegressor(_Regressor):
         """
 
         return [(band, importance) for band, importance in
-                zip(self.data['feature_names'], self.regressor.feature_importances_)]
+                zip(self.data.x_name, self.regressor.feature_importances_)]
 
     def sample_predictions(self,
                            data,
@@ -1209,7 +1229,7 @@ class RFRegressor(_Regressor):
                            **kwargs):
         """
         Get tree predictions from the RF regressor
-        :param data: Dictionary object from Samples.format_data
+        :param data: Samples object
         :param output_type: Metric to be computed from RandomForestRegressor.
                            (options: 'mean','median','sd', 'var','full')
         :param kwargs: Keyword arguments:
@@ -1232,32 +1252,32 @@ class RFRegressor(_Regressor):
         else:
             verbose = False
 
-        self.feature_index = list(data['feature_names'].index(feat) for feat in self.features)
+        self.feature_index = list(data.x_name.index(feat) for feat in self.features)
 
         if 'regress_limit' in kwargs:
             regress_limit = kwargs['regress_limit']
         else:
             regress_limit = None
 
-        prediction = self.predict(data['features'],
+        prediction = self.predict(data.x,
                                   output_type=output_type,
                                   verbose=verbose)
 
         if regress_limit is not None:
-            lm = self.linear_regress(data['labels'],
+            lm = self.linear_regress(data.y,
                                      prediction,
                                      xlim=regress_limit)
         else:
-            lm = self.linear_regress(data['labels'],
+            lm = self.linear_regress(data.y,
                                      prediction)
 
-        rmse = sqrt(mean_squared_error(data['labels'], prediction))
+        rmse = sqrt(mean_squared_error(data.y, prediction))
 
         # if outfile and pickle file are not provided,
         # then only return values
         out_dict = {
             'pred': prediction,
-            'labels': data['labels'],
+            'labels': data.y,
             'rmse': rmse,
             'rsq': lm['rsq'],
             'slope': lm['slope'],
@@ -1280,7 +1300,7 @@ class RFRegressor(_Regressor):
         """
 
         if data_limits is None:
-            data_limits = [self.data['labels'].min(), self.data['labels'].max()]
+            data_limits = [self.data.y.min(), self.data.y.max()]
 
         regress_limit = [data_limits[0] + clip * (data_limits[1]-data_limits[0]),
                          data_limits[0] + (1.0-clip) * (data_limits[1]-data_limits[0])]
@@ -1377,17 +1397,17 @@ class HRFRegressor(RFRegressor):
         self.feature_index = list(list(raster_obj.bnames.index(feat) for feat in feat_grp)
                                   for feat_grp in self.features)
 
-        return _Regressor.regress_raster(self,
-                                         raster_obj,
-                                         outfile=outfile,
-                                         outdir=outdir,
-                                         band_name=band_name,
-                                         output_type=output_type,
-                                         out_data_type=out_data_type,
-                                         nodatavalue=nodatavalue,
-                                         array_multiplier=array_multiplier,
-                                         array_additive=array_additive,
-                                         **kwargs)
+        return super(HRFRegressor, self).regress_raster(self,
+                                                        raster_obj,
+                                                        outfile=outfile,
+                                                        outdir=outdir,
+                                                        band_name=band_name,
+                                                        output_type=output_type,
+                                                        out_data_type=out_data_type,
+                                                        nodatavalue=nodatavalue,
+                                                        array_multiplier=array_multiplier,
+                                                        array_additive=array_additive,
+                                                        **kwargs)
 
     def predict(self,
                 arr,
@@ -1484,7 +1504,7 @@ class HRFRegressor(RFRegressor):
 
         # leaf variance limit for sd or var output type
         if min_variance is None:
-            min_variance = 0.025 * (self.data['labels'].max() - self.data['labels'].min())
+            min_variance = 0.0  # 0.025 * (self.data.y.max() - self.data.y.min())
 
         # define input array shape param
         if tile_end is None:
@@ -1544,7 +1564,7 @@ class HRFRegressor(RFRegressor):
                     kwargs['band_additives'][feature_index[ii]]
 
                 # initialize output array for this regressor
-                tile_arr = np.zeros([regressor.trees, tile_index[ii].shape[0]], dtype=float)
+                tile_arr = np.zeros([regressor.n_estimators, tile_index[ii].shape[0]], dtype=float)
 
                 if output_type in ('mean', 'median'):
 
@@ -1559,10 +1579,19 @@ class HRFRegressor(RFRegressor):
 
                 elif output_type in ('sd', 'var'):
 
-                    # calculate variance of output across all the leaf nodes
+                    # Calculate variance of output across all the leaf nodes:
+                    # Each leaf node may have multiple samples in it.
+                    # We are trying to find standard deviation
+                    # across all leaf node samples in all the trees
+                    # using tree impurity statistic as we cannot access all the samples
+                    # once the tree is constructed.
+                    # Population variance is sum of between group variance and within group variance
+                    # read http://arxiv.org/pdf/1211.0906v2.pdf
                     for jj, tree_ in enumerate(regressor.regressor.estimators_):
+                        # predict the tree output for the tile
                         tile_arr[jj, :] = tree_.predict(temp_arr)
 
+                        # variance in output at the leaf node of the tree
                         var_tree = tree_.tree_.impurity[tree_.apply(temp_arr)]
 
                         var_tree[var_tree < min_variance] = min_variance
