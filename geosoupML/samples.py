@@ -569,8 +569,8 @@ class Samples:
         ran_samp.y_name = self.y_name
         ran_samp.x = self.x[ran_samp_n, :]
         ran_samp.y = self.y[ran_samp_n]
-        ran_samp.nsamp = self.x.shape[0]
-        ran_samp.nfeat = self.x.shape[1]
+        ran_samp.nsamp = ran_samp.x.shape[0]
+        ran_samp.nfeat = ran_samp.x.shape[1]
         ran_samp.index = np.arange(0, ran_samp.nsamp)
 
         if np.issubdtype(ran_samp.x.dtype, np.number):
@@ -582,35 +582,60 @@ class Samples:
 
         return ran_samp
 
-    def selection(self,
-                  index_list):
+    def select(self,
+               index_list):
         """
         Method to select samples based on an index list
         :param index_list:
         :return: Samples object
         """
-        if type(index_list).__name__ in ('list', 'tuple', 'NoneType'):
-            index_list = np.array(Opt.__copy__(index_list))
+        if type(index_list) in (list, tuple, None):
+            index_list = np.array(list(set(index_list.copy())))
 
-        warnings.simplefilter('ignore')
-        samp = Samples()
-        warnings.simplefilter('default')
-        samp.x_name = self.x_name
-        samp.y_name = self.y_name
-        samp.x = self.x[index_list, :]
-        samp.y = self.y[index_list]
-        samp.nsamp = self.x.shape[0]
-        samp.nfeat = self.x.shape[1]
-        samp.index = np.arange(0, samp.nsamp)
+        if (np.max(index_list) > self.nsamp) or (np.min(index_list) < 0):
+            raise ValueError("Index list out of bounds with {} min and/or {} max".format(str(np.min(index_list)),
+                                                                                         str(np.max(index_list))))
 
-        if np.issubdtype(samp.x.dtype, np.number):
-            samp.xmin = samp.x.min(0, initial=-self.max_allow_x)
-            samp.xmax = samp.x.max(0, initial=self.max_allow_x)
-        if np.issubdtype(samp.x.dtype, np.number):
-            samp.ymin = samp.y.min(initial=-self.max_allow_y)
-            samp.ymax = samp.y.max(initial=self.max_allow_y)
+        else:
+            warnings.simplefilter('ignore')
+            samp = Samples()
+            warnings.simplefilter('default')
+            samp.x_name = self.x_name
+            samp.y_name = self.y_name
+            samp.x = self.x[index_list, :]
+            samp.y = self.y[index_list]
+            samp.nsamp = samp.x.shape[0]
+            samp.nfeat = samp.x.shape[1]
+            samp.index = np.arange(0, samp.nsamp)
 
-        return samp
+            if np.issubdtype(samp.x.dtype, np.number):
+                samp.xmin = samp.x.min(0, initial=-self.max_allow_x)
+                samp.xmax = samp.x.max(0, initial=self.max_allow_x)
+            if np.issubdtype(samp.x.dtype, np.number):
+                samp.ymin = samp.y.min(initial=-self.max_allow_y)
+                samp.ymax = samp.y.max(initial=self.max_allow_y)
+
+            return samp
+
+    def select_inverse(self,
+                       index_list):
+
+        """
+        Method to select samples other than those on the index list
+        :param index_list:
+        :return: Samples object
+        """
+
+        if type(index_list) in (list, tuple, None):
+            index_list = np.array(list(set(index_list.copy())))
+
+        if (np.max(index_list) > self.nsamp) or (np.min(index_list) < 0):
+            raise ValueError("Index list out of bounds with {} min and/or {} max".format(str(np.min(index_list)),
+                                                                                         str(np.max(index_list))))
+
+        else:
+            reverse_indices = self.index[~np.in1d(self.index, index_list)]
+            return self.select(reverse_indices)
 
     def add_samp(self,
                  samp):
@@ -619,7 +644,7 @@ class Samples:
         :param samp:
         :return: None
         """
-        self.merge_data(samp)
+        self.merge(samp)
 
     def make_folds(self,
                    n_folds=5,
@@ -653,8 +678,8 @@ class Samples:
             index_list = index_list[~np.in1d(index_list,
                                              val_index)]
 
-            fold_samples.append((self.selection(trn_index),
-                                 self.selection(val_index)))
+            fold_samples.append((self.select(trn_index),
+                                 self.select(val_index)))
 
         return fold_samples
 
