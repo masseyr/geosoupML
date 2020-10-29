@@ -80,12 +80,8 @@ class Samples:
         self.max_allow_x = max_allow_x
         self.max_allow_y = max_allow_y
 
-        # either of label name or csv file is provided without the other
-        if (csv_file is None) and (label_colname is None):
-            warnings.warn("Samples class initiated without data file or label")
-
         # label name or csv file are provided
-        elif (label_colname is not None) and (csv_file is not None):
+        if (label_colname is not None) and (csv_file is not None):
 
             temp = Handler(filename=csv_file).read_from_csv(return_dicts=True,
                                                             line_limit=line_limit)
@@ -148,7 +144,8 @@ class Samples:
                                    for samp_dict in clean_list))
 
         else:
-            ValueError("No data found for label.")
+            warnings.warn("Samples class initiated without data file and/or label",
+                          category=RuntimeWarning, stacklevel=1)
 
         if self.x is not None and self.y is not None:
             if self.y_name is None:
@@ -259,7 +256,9 @@ class Samples:
                 isinstance(index_locations, np.ndarray) or \
                 isinstance(index_locations, int):
 
+            warnings.simplefilter('ignore')
             outsamp = Samples()
+            warnings.simplefilter('default')
             outsamp.x_name = self.x_name
             outsamp.y_name = self.y_name
 
@@ -370,8 +369,8 @@ class Samples:
         else:
             raise TypeError("Flexible data type for X - Cannot compute histograms")
 
-    def merge_data(self,
-                   samp):
+    def merge(self,
+              samp):
         """
         Merge two sample sets together
         column and label names and orders should be the same in the two datasets
@@ -503,7 +502,9 @@ class Samples:
         val_sites = self.index[~np.in1d(self.index, trn_sites)]
 
         # training sample object
+        warnings.simplefilter('ignore')
         trn_samp = Samples()
+        warnings.simplefilter('default')
         trn_samp.x_name = self.x_name
         trn_samp.y_name = self.y_name
         trn_samp.x = self.x[trn_sites, :]
@@ -521,7 +522,9 @@ class Samples:
             trn_samp.ymax = trn_samp.y.max(initial=self.max_allow_y)
 
         # validation sample object
+        warnings.simplefilter('ignore')
         val_samp = Samples()
+        warnings.simplefilter('default')
         val_samp.x_name = self.x_name
         val_samp.y_name = self.y_name
         val_samp.x = self.x[val_sites, :]
@@ -559,7 +562,9 @@ class Samples:
                                           replace=False)
 
         # training sample object
+        warnings.simplefilter('ignore')
         ran_samp = Samples()
+        warnings.simplefilter('default')
         ran_samp.x_name = self.x_name
         ran_samp.y_name = self.y_name
         ran_samp.x = self.x[ran_samp_n, :]
@@ -587,7 +592,9 @@ class Samples:
         if type(index_list).__name__ in ('list', 'tuple', 'NoneType'):
             index_list = np.array(Opt.__copy__(index_list))
 
+        warnings.simplefilter('ignore')
         samp = Samples()
+        warnings.simplefilter('default')
         samp.x_name = self.x_name
         samp.y_name = self.y_name
         samp.x = self.x[index_list, :]
