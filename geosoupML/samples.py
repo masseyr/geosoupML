@@ -407,6 +407,7 @@ class Samples:
         self.x_name = self.x_name.remove(column_id)
         self.columns = np.arange(0, self.x.shape[1])
         self.nvar = self.x.shape[1]
+        self.nfeat = self.x.shape[1]
 
     def extract_column(self,
                        column_id=None,
@@ -468,6 +469,7 @@ class Samples:
 
             self.columns = list(range(0, self.x.shape[1]))
             self.nvar = len(self.columns)
+            self.nfeat = self.x.shape[1]
 
     def save_to_file(self,
                      out_file):
