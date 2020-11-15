@@ -37,7 +37,8 @@ class Samples:
         :param label_colname: column in csv file that contains the feature label (output value)
         :param x: 2d array containing features (samples) without the label
         :param y: 1d array of feature labels (same order as x)
-        :param x_name: 1d array of feature names (bands)
+        :param x_name: 1d array of feature names (bands).
+                       Can be used to select which columns to read from csv file.
         :param y_name: name of label
         :param use_band_dict: list of attribute (band) names
         :param max_allow_x: Maximum allowed values of x
@@ -97,7 +98,10 @@ class Samples:
             _ = feat_names.pop(loc)
 
             # read from data dictionary
-            self.x_name = feat_names
+            if self.x_name is not None and type(self.x_name) in (list, tuple):
+                self.x_name = [elem for elem in feat_names if elem in self.x_name]
+            else:
+                self.x_name = feat_names
 
             clean_list = []
             if remove_null:
@@ -139,7 +143,11 @@ class Samples:
                 clean_list = temp
 
             # read from data dictionary
-            self.x_name = list(clean_list[0].keys())
+            feat_names = list(clean_list[0].keys())
+            if self.x_name is not None and type(self.x_name) in (list, tuple):
+                self.x_name = [elem for elem in feat_names if elem in self.x_name]
+            else:
+                self.x_name = feat_names
             self.x = np.array(list(list(samp_dict[feat_name] for feat_name in self.x_name)
                                    for samp_dict in clean_list))
 
