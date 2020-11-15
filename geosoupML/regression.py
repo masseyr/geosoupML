@@ -162,12 +162,12 @@ class _Regressor(object, metaclass=ABCMeta):
         Find out how well the training samples fit the model
         :param regressor: _Regressor child class
         :param samples: data to get model fit on
-        :param param_dict: Paramters dictionary for _Regressor child class
+        :param param_dict: Parameters dictionary for _Regressor child class
         :param n_folds: Number of folds to compute results for
         :param use_weights: If weights should be used for model fit/training
         :param adjust: If the gain and bias should be adjusted
-        :param return_summary: IF summary should be returned or non-summarized results
-        :param output_type: Metric to be omputed from the random forest (options: 'mean','median','sd')
+        :param return_summary: If summary should be returned or non-summarized results
+        :param output_type: Metric to be computed from the random forest (options: 'mean','median','sd')
         :param regress_limit: List of upper and lower regression limits for training fit prediction
         :return: None
         """
@@ -545,25 +545,43 @@ class _Regressor(object, metaclass=ABCMeta):
         :param xlim: 2 element list or tuple [lower limit, upper limit]
         :param ylim: 2 element list or tuple [lower limit, upper limit]
         """
-        if type(x).__name__ in ('list', 'tuple', 'NoneType'):
+        if type(x) in (list, tuple, None):
             x_ = np.array(x)
-        else:
+        elif type(x) == np.ndarray:
             x_ = x.copy()
-
-        if type(y).__name__ in ('list', 'tuple', 'NoneType'):
-            y_ = np.array(y)
         else:
+            raise ValueError('Non-array type x')
+
+        if type(y) in (list, tuple, None):
+            y_ = np.array(y)
+        elif type(y) == np.ndarray:
             y_ = y.copy()
+        else:
+            raise ValueError('Non-array type y')
 
         if xlim is not None:
-            y_ = y_[np.where((x_ >= xlim[0]) & (x_ <= xlim[1]))]
-            x_ = x_[np.where((x_ >= xlim[0]) & (x_ <= xlim[1]))]
+            exclude_loc_x = np.where((x_ < xlim[0]) & (x_ > xlim[1]))[0]
+        else:
+            exclude_loc_x = np.array([])
 
         if ylim is not None:
-            x_ = x_[np.where((y_ >= ylim[0]) & (y_ <= ylim[1]))]
-            y_ = y_[np.where((y_ >= ylim[0]) & (y_ <= ylim[1]))]
+            exclude_loc_y = np.where((y_ < ylim[0]) & (y_ > ylim[1]))[0]
+        else:
+            exclude_loc_y = np.array([])
 
-        slope, intercept, r_value, p_value, std_err = stats.linregress(x_, y_)
+        exclude_locs = np.unique(np.hstack([exclude_loc_x, exclude_loc_y])).astype(np.int64)
+
+        if exclude_locs.shape[0] > 0:
+            mask = np.zeros(x_.shape[0], dtype=np.bool) + True
+            mask[exclude_locs] = False
+
+            x_in_limits = x_[np.where(mask)]
+            y_in_limits = y_[np.where(mask)]
+        else:
+            x_in_limits = x_
+            y_in_limits = y_
+
+        slope, intercept, r_value, p_value, std_err = stats.linregress(x_in_limits, y_in_limits)
         rsq = r_value ** 2
 
         out_dict = {
@@ -770,12 +788,12 @@ class MRegressor(_Regressor):
         }
 
     def get_adjustment_param(self,
-                             clip=0.025,
+                             clip=0.0,
                              data_limits=None,
                              over_adjust=1.0):
         """
         get the model adjustment parameters based on training fit
-        :param clip: ratio of the data to be clipped from either ends to fit a constraining regression
+        :param clip: percent of the data to be clipped from either ends to fit a constraining regression
         :param data_limits: minimum and maximum value of the output, tuple
         :param over_adjust: factor to multiply the final output with
 
@@ -784,8 +802,8 @@ class MRegressor(_Regressor):
         if data_limits is None:
             data_limits = [self.data.y.min(), self.data.y.max()]
 
-        regress_limit = [data_limits[0] + clip * (data_limits[1]-data_limits[0]),
-                         data_limits[1] - clip * (data_limits[1]-data_limits[0])]
+        regress_limit = [data_limits[0] + (clip/100.0) * (data_limits[1]-data_limits[0]),
+                         data_limits[1] - (clip/100.0) * (data_limits[1]-data_limits[0])]
 
         self.get_training_fit(regress_limit=regress_limit)
 
