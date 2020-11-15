@@ -1,4 +1,4 @@
-## Geosoup Machine Learning library v0.1.46
+## Geosoup Machine Learning library v0.1.47
 
 [![DOI](https://zenodo.org/badge/259178307.svg)](https://zenodo.org/badge/latestdoi/259178307)
 
