@@ -1,4 +1,4 @@
-## Geosoup Machine Learning library v0.1.48
+## Geosoup Machine Learning library v0.1.51
 
 
 
@@ -16,4 +16,4 @@ Install using:
 `pip install geosoupML`
 
 
-_Note: Must have_ `GDAL >= 2.1.3` _up and running before installing geosoup and geosoupML._
+Note: Must have `GDAL >= 2.1.3` up and running before installing geosoup and geosoupML.
