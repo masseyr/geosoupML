@@ -120,10 +120,11 @@ class _Regressor(object, metaclass=ABCMeta):
             else:
                 raise RuntimeError("Instance does not have sample_predictions() method")
 
-            self.training_results['rsq'] = pred['rsq'] * 100.0
-            self.training_results['slope'] = pred['slope']
-            self.training_results['intercept'] = pred['intercept']
-            self.training_results['rmse'] = pred['rmse']
+            if not any(elem is None for elem in list(pred.values())):
+                self.training_results['rsq'] = pred['rsq'] * 100.0
+                self.training_results['slope'] = pred['slope']
+                self.training_results['intercept'] = pred['intercept']
+                self.training_results['rmse'] = pred['rmse']
         else:
             raise ValueError("Model not initialized with samples. Use fit_data() method")
 
@@ -781,20 +782,33 @@ class MRegressor(_Regressor):
         else:
             y = data.y
 
-        # rms error of the actual versus predicted
-        rmse = sqrt(mean_squared_error(y, prediction))
+        if y.shape[0] > 0:
 
-        # r-squared of actual versus predicted
-        lm = self.linear_regress(y, prediction)
+            # rms error of the actual versus predicted
+            rmse = sqrt(mean_squared_error(y, prediction))
 
-        return {
-            'pred': prediction,
-            'labels': y,
-            'rmse': rmse,
-            'rsq': lm['rsq'],
-            'slope': lm['slope'],
-            'intercept': lm['intercept'],
-        }
+            # r-squared of actual versus predicted
+            lm = self.linear_regress(y, prediction)
+
+            return {
+                'pred': prediction,
+                'labels': y,
+                'rmse': rmse,
+                'rsq': lm['rsq'],
+                'slope': lm['slope'],
+                'intercept': lm['intercept'],
+            }
+        else:
+            warnings.warn('No valid prediction found for R-squared and RMSE calculation')
+
+            return {
+                'pred': None,
+                'labels': None,
+                'rmse': None,
+                'rsq': None,
+                'slope': None,
+                'intercept': None,
+            }
 
     def get_adjustment_param(self,
                              clip=0.0,
@@ -816,13 +830,16 @@ class MRegressor(_Regressor):
 
         self.get_training_fit(regress_limit=regress_limit)
 
-        if self.training_results['intercept'] > regress_limit[0]:
-            self.adjustment['bias'] = -1.0 * (self.training_results['intercept'] / self.training_results['slope'])
+        if len(self.training_results) and \
+                all([key in self.training_results for key in ['intercept', 'slope', 'bias', 'gain']]):
 
-        self.adjustment['gain'] = (1.0 / self.training_results['slope']) * over_adjust
+            if self.training_results['intercept'] > regress_limit[0]:
+                self.adjustment['bias'] = -1.0 * (self.training_results['intercept'] / self.training_results['slope'])
 
-        self.adjustment['lower_limit'] = data_limits[0]
-        self.adjustment['upper_limit'] = data_limits[1]
+            self.adjustment['gain'] = (1.0 / self.training_results['slope']) * over_adjust
+
+            self.adjustment['lower_limit'] = data_limits[0]
+            self.adjustment['upper_limit'] = data_limits[1]
 
 
 class RFRegressor(_Regressor):
@@ -1290,14 +1307,6 @@ class RFRegressor(_Regressor):
                                   output_type=output_type,
                                   verbose=verbose)
 
-        if regress_limit is not None:
-            lm = self.linear_regress(data.y,
-                                     prediction,
-                                     xlim=regress_limit)
-        else:
-            lm = self.linear_regress(data.y,
-                                     prediction)
-
         nan_present = np.isnan(prediction)
 
         if np.any(nan_present):
@@ -1307,19 +1316,41 @@ class RFRegressor(_Regressor):
         else:
             y = data.y
 
-        rmse = sqrt(mean_squared_error(y, prediction))
+        if y.shape[0] > 0:
 
-        # if outfile and pickle file are not provided,
-        # then only return values
-        out_dict = {
-            'pred': prediction,
-            'labels': data.y,
-            'rmse': rmse,
-            'rsq': lm['rsq'],
-            'slope': lm['slope'],
-            'intercept': lm['intercept'],
-        }
-        return out_dict
+            if regress_limit is not None:
+                lm = self.linear_regress(data.y,
+                                         prediction,
+                                         xlim=regress_limit)
+            else:
+                lm = self.linear_regress(data.y,
+                                         prediction)
+
+            rmse = sqrt(mean_squared_error(y, prediction))
+
+            # if outfile and pickle file are not provided,
+            # then only return values
+            out_dict = {
+                'pred': prediction,
+                'labels': y,
+                'rmse': rmse,
+                'rsq': lm['rsq'],
+                'slope': lm['slope'],
+                'intercept': lm['intercept'],
+            }
+            return out_dict
+
+        else:
+            warnings.warn('No valid prediction found for R-squared and RMSE calculation')
+
+            return {
+                'pred': None,
+                'labels': None,
+                'rmse': None,
+                'rsq': None,
+                'slope': None,
+                'intercept': None,
+            }
 
     def get_adjustment_param(self,
                              data_limits=None,
@@ -1344,13 +1375,16 @@ class RFRegressor(_Regressor):
         self.get_training_fit(regress_limit=regress_limit,
                               output_type=output_type)
 
-        if self.training_results['intercept'] > regress_limit[0]:
-            self.adjustment['bias'] = -1.0 * (self.training_results['intercept'] / self.training_results['slope'])
+        if len(self.training_results) and \
+                all([key in self.training_results for key in ['intercept', 'slope', 'bias', 'gain']]):
 
-        self.adjustment['gain'] = (1.0 / self.training_results['slope']) * over_adjust
+            if self.training_results['intercept'] > regress_limit[0]:
+                self.adjustment['bias'] = -1.0 * (self.training_results['intercept'] / self.training_results['slope'])
 
-        self.adjustment['lower_limit'] = data_limits[0]
-        self.adjustment['upper_limit'] = data_limits[1]
+            self.adjustment['gain'] = (1.0 / self.training_results['slope']) * over_adjust
+
+            self.adjustment['lower_limit'] = data_limits[0]
+            self.adjustment['upper_limit'] = data_limits[1]
 
 
 class HRFRegressor(RFRegressor):
