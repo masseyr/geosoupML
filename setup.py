@@ -1,11 +1,11 @@
-import setuptools
+from setuptools import setup, find_packages
 
 with open("README.md", "r") as fh:
     long_description = fh.read()
 
-setuptools.setup(
+setup(
     name="geosoupML",
-    version="0.1.47",
+    version="0.1.48",
     author="Richard Massey",
     author_email="rm885@nau.edu",
     license='Apache License 2.0',
@@ -13,7 +13,7 @@ setuptools.setup(
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/masseyr/geosoupML",
-    packages=setuptools.find_packages(),
+    packages=find_packages(),
     classifiers=[
         'Topic :: Scientific/Engineering :: GIS',
         'Intended Audience :: Science/Research',
