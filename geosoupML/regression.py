@@ -769,18 +769,27 @@ class MRegressor(_Regressor):
         self.feature_index = list(data.x_name.index(feat) for feat in self.features)
 
         # calculate variance of tree predictions
-        y = self.predict(data.x,
-                         verbose=verbose)
+        prediction = self.predict(data.x,
+                                  verbose=verbose)
 
-        # rms error of the predicted versus actual
-        rmse = sqrt(mean_squared_error(data.y, y))
+        nan_present = np.isnan(prediction)
 
-        # r-squared of predicted versus actual
-        lm = self.linear_regress(data.y, y)
+        if np.any(nan_present):
+            non_nan_loc = np.where(~nan_present)
+            prediction = prediction[non_nan_loc]
+            y = data.y[non_nan_loc]
+        else:
+            y = data.y
+
+        # rms error of the actual versus predicted
+        rmse = sqrt(mean_squared_error(y, prediction))
+
+        # r-squared of actual versus predicted
+        lm = self.linear_regress(y, prediction)
 
         return {
-            'pred': y,
-            'labels': data.y,
+            'pred': prediction,
+            'labels': y,
             'rmse': rmse,
             'rsq': lm['rsq'],
             'slope': lm['slope'],
@@ -1289,7 +1298,16 @@ class RFRegressor(_Regressor):
             lm = self.linear_regress(data.y,
                                      prediction)
 
-        rmse = sqrt(mean_squared_error(data.y, prediction))
+        nan_present = np.isnan(prediction)
+
+        if np.any(nan_present):
+            non_nan_loc = np.where(~nan_present)
+            prediction = prediction[non_nan_loc]
+            y = data.y[non_nan_loc]
+        else:
+            y = data.y
+
+        rmse = sqrt(mean_squared_error(y, prediction))
 
         # if outfile and pickle file are not provided,
         # then only return values
