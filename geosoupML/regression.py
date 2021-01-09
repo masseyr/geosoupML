@@ -54,11 +54,13 @@ class _Regressor(object, metaclass=ABCMeta):
 
     def fit_data(self,
                  data,
-                 use_weights=False):
+                 use_weights=False,
+                 output_type='mean'):
         """
         Train the regressor
         :param data: Samples object
         :param use_weights: If the sample weights provided should be used? (default: False)
+        :param output_type: Metric to be computed from the random forest (options: 'mean','median','sd')
         :return: None
         """
         self.data = data
@@ -73,6 +75,8 @@ class _Regressor(object, metaclass=ABCMeta):
         self.features = data.x_name
         self.label = data.y_name
         self.fit = True
+
+        self.get_training_fit(data, output_type=output_type)
 
     def pickle_it(self,
                   outfile):
@@ -828,18 +832,16 @@ class MRegressor(_Regressor):
         regress_limit = [data_limits[0] + (clip/100.0) * (data_limits[1]-data_limits[0]),
                          data_limits[1] - (clip/100.0) * (data_limits[1]-data_limits[0])]
 
-        self.get_training_fit(regress_limit=regress_limit)
+        if len(self.training_results) == 0:
+            self.get_training_fit(regress_limit=regress_limit)
 
-        if len(self.training_results) and \
-                all([key in self.training_results for key in ['intercept', 'slope', 'bias', 'gain']]):
+        if self.training_results['intercept'] > regress_limit[0]:
+            self.adjustment['bias'] = -1.0 * (self.training_results['intercept'] / self.training_results['slope'])
 
-            if self.training_results['intercept'] > regress_limit[0]:
-                self.adjustment['bias'] = -1.0 * (self.training_results['intercept'] / self.training_results['slope'])
+        self.adjustment['gain'] = (1.0 / self.training_results['slope']) * over_adjust
 
-            self.adjustment['gain'] = (1.0 / self.training_results['slope']) * over_adjust
-
-            self.adjustment['lower_limit'] = data_limits[0]
-            self.adjustment['upper_limit'] = data_limits[1]
+        self.adjustment['lower_limit'] = data_limits[0]
+        self.adjustment['upper_limit'] = data_limits[1]
 
 
 class RFRegressor(_Regressor):
@@ -1372,19 +1374,17 @@ class RFRegressor(_Regressor):
         regress_limit = [data_limits[0] + clip * (data_limits[1]-data_limits[0]),
                          data_limits[0] + (1.0-clip) * (data_limits[1]-data_limits[0])]
 
-        self.get_training_fit(regress_limit=regress_limit,
-                              output_type=output_type)
+        if len(self.training_results) == 0:
+            self.get_training_fit(regress_limit=regress_limit,
+                                  output_type=output_type)
 
-        if len(self.training_results) and \
-                all([key in self.training_results for key in ['intercept', 'slope', 'bias', 'gain']]):
+        if self.training_results['intercept'] > regress_limit[0]:
+            self.adjustment['bias'] = -1.0 * (self.training_results['intercept'] / self.training_results['slope'])
 
-            if self.training_results['intercept'] > regress_limit[0]:
-                self.adjustment['bias'] = -1.0 * (self.training_results['intercept'] / self.training_results['slope'])
+        self.adjustment['gain'] = (1.0 / self.training_results['slope']) * over_adjust
 
-            self.adjustment['gain'] = (1.0 / self.training_results['slope']) * over_adjust
-
-            self.adjustment['lower_limit'] = data_limits[0]
-            self.adjustment['upper_limit'] = data_limits[1]
+        self.adjustment['lower_limit'] = data_limits[0]
+        self.adjustment['upper_limit'] = data_limits[1]
 
 
 class HRFRegressor(RFRegressor):
