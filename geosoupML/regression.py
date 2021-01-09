@@ -192,11 +192,14 @@ class _Regressor(object, metaclass=ABCMeta):
             if adjust and (get_adjustment_param is not None) and callable(get_adjustment_param):
                 get_adjustment_param(data_limits=regress_limit,
                                      output_type=output_type)
+                training_results = {'t_{}'.format(str(k)): v for k, v in regressor.training_results.items()}
+            else:
+                training_results = {}
 
             pred = regressor.sample_predictions(test_data,
                                                 regress_limit=regress_limit,
                                                 output_type=output_type)
-            results.append(pred)
+            results.append(pred.update(training_results))
 
         if not return_summary:
             return results
@@ -208,7 +211,16 @@ class _Regressor(object, metaclass=ABCMeta):
                        'slope_mean': np.mean([result['slope'] for result in results]),
                        'slope_sd': np.std([result['slope'] for result in results]),
                        'intercept_mean': np.mean([result['intercept'] for result in results]),
-                       'intercept_sd': np.std([result['intercept'] for result in results])}
+                       'intercept_sd': np.std([result['intercept'] for result in results]),
+                       't_rsq_mean': np.mean([result['t_rsq'] for result in results]),
+                       't_rsq_std': np.std([result['t_rsq'] for result in results]),
+                       't_rmse_mean': np.mean([result['t_rmse'] for result in results]),
+                       't_rmse_std': np.std([result['t_rmse'] for result in results]),
+                       't_slope_mean': np.mean([result['t_slope'] for result in results]),
+                       't_intercept_mean': np.mean([result['t_intercept'] for result in results])}
+
+            _output['mean_rsq_diff'] = _output['t_rsq_mean'] - _output['rsq_mean']
+            _output['mean_slope_diff'] = _output['t_slope_mean'] - _output['slope_mean']
 
             for fold_indx in range(n_folds):
                 _output.update({'rsq_fold_{}'.format(fold_indx + 1): results[fold_indx]['rsq']})
